@@ -59,5 +59,10 @@
       "interrupt_ok": true,
       "animations": ["Alert"]
     }
+  },
+  "llm": {
+    "provider": "openai-compatible",
+    "base_url": "",
+    "model": ""
   }
 }

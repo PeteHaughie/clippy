@@ -13,9 +13,9 @@ Legend: ✅ closed · ⬜ open but blocked · 👀 open/unblocked/unclaimed (tak
 | 005 | Sandbox by default, build mode on toggle | grilling | 👀 | — | [005-sandbox-by-default-build-mode-on-toggle.md](tickets/005-sandbox-by-default-build-mode-on-toggle.md) |
 | 006 | One-shot demo scenario | grilling | 👀 | — | [006-one-shot-demo-scenario.md](tickets/006-one-shot-demo-scenario.md) |
 | 007 | Install Pi locally | task | ✅ | — | [007-install-pi-locally.md](tickets/007-install-pi-locally.md) |
-| 008 | Demo provider and model | grilling | 👀 | — | [008-demo-provider-and-model.md](tickets/008-demo-provider-and-model.md) |
+| 008 | Demo provider and model | grilling | ✅ | — | [008-demo-provider-and-model.md](tickets/008-demo-provider-and-model.md) |
 | 009 | Contextual animation moods + agent API | prototype | ✅ | — | [009-contextual-animation-moods-and-agent-api.md](tickets/009-contextual-animation-moods-and-agent-api.md) |
 
-**Frontier (takeable next):** Sandbox by default, build mode on toggle · One-shot demo scenario · Demo provider and model
+**Frontier (takeable next):** Sandbox by default, build mode on toggle · One-shot demo scenario
 
-**Blocked:** Sub-clippy lifecycle and explosion (waits on 008 — window stack from 003 now done, Pi from 007 installed, mood system from 009 done)
+**Blocked:** Sub-clippy lifecycle and explosion (was waiting on 003/007/008 — all now closed/installed; unblocked)
