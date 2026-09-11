@@ -29,7 +29,6 @@ class ClippyShell(Window):
         self.fps = FPSDisplay(window=self)
         self.thinking = False
         self._bubble = ""
-        self.on_delegate = None
         self.label = pyglet.text.Label(
             "",
             font_name="Helvetica",
@@ -75,8 +74,6 @@ class ClippyShell(Window):
             self.express("thinking" if self.thinking else "idle")
         elif symbol == pyglet.window.key.E:
             self.explosion.trigger()
-        elif symbol == pyglet.window.key.D and self.on_delegate is not None:
-            self.on_delegate()
         elif symbol == pyglet.window.key.Q:
             pyglet.app.exit()
         else:
@@ -93,9 +90,9 @@ class ClippyShell(Window):
         self.label.x = pad
         self.label.y = int(pad + self.avatar.frame_h * self.avatar.scale) + 6
         mood = self.avatar.current_mood
-        bubble = self._bubble.replace("\n", " ") if self._bubble else "(press D to delegate)"
+        bubble = self._bubble.replace("\n", " ") if self._bubble else "(idle)"
         self.label.text = (
-            f"mood:{mood} · {bubble} (P pass / T think / E explode / D delegate / Q quit)"
+            f"mood:{mood} · {bubble} (P pass / T think / E explode / Q quit)"
         )
         self.label.draw()
         self.fps.draw()

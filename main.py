@@ -5,13 +5,13 @@ Controls:
   T  toggle Thinking / RestPose animation
   Space  Wave
   E  trigger the explosion
-  D  delegate a task to a sub-clippy (spawns a second floating window)
   Q  quit
 
 Flags:
   --mood <name> [--hint <hint>]  drive a single mood once, then quit
   --moodcycle                    play every mood in sequence, then quit
-  --delegate "<task>"            summon a sub-clippy for this task at startup
+  --delegate [task]              summon a sub-clippy (optional task; uses the
+                                 default when omitted)
   --real                         force the real Pi sub-agent (oMLX) instead of
                                  auto-falling back to the mock
   --model <omlx/model>           which oMLX model the real sub-agent uses
@@ -83,7 +83,7 @@ def main() -> int:
     parser.add_argument("--mood", help="play one mood then quit")
     parser.add_argument("--hint", help="activity hint for --mood")
     parser.add_argument("--moodcycle", action="store_true", help="play every mood in sequence then quit")
-    parser.add_argument("--delegate", help="summon a sub-clippy for this task at startup")
+    parser.add_argument("--delegate", nargs="?", const=DEFAULT_TASK, help="summon a sub-clippy for this task at startup (default task when omitted)")
     parser.add_argument("--real", action="store_true", help="force the real Pi sub-agent")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="omlx model for the real sub-agent")
     args = parser.parse_args()
@@ -92,13 +92,9 @@ def main() -> int:
     shell.show()
     pyglet.clock.schedule_interval(shell.update, 1 / 60)
 
+    delegator = Delegator(shell, real=args.real, model=args.model)
     if args.delegate:
-        delegator = Delegator(shell, real=args.real, model=args.model)
-        shell.on_delegate = lambda: delegator.delegate()
         delegator.delegate(args.delegate)
-    else:
-        delegator = Delegator(shell, real=args.real, model=args.model)
-        shell.on_delegate = lambda: delegator.delegate()
 
     moods = shell.avatar.moods
 

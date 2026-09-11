@@ -19,9 +19,14 @@ _VERTEX_SRC = """#version 150 core
 in vec2 a_position;
 in vec2 a_tex_coords;
 out vec2 v_tex_coords;
+uniform WindowBlock
+{
+    mat4 projection;
+    mat4 view;
+} window;
 void main() {
     v_tex_coords = a_tex_coords;
-    gl_Position = vec4(a_position, 0.0, 1.0);
+    gl_Position = window.projection * window.view * vec4(a_position, 0.0, 1.0);
 }
 """
 
@@ -36,7 +41,7 @@ void main() {
     vec4 col = texture(u_texture, v_tex_coords);
     vec3 diff = abs(col.rgb - u_key_color);
     float dist = max(diff.r, max(diff.g, diff.b));
-    float alpha = 1.0 - smoothstep(u_similarity, u_similarity + u_smoothness, dist);
+    float alpha = smoothstep(u_similarity, u_similarity + u_smoothness, dist);
     out_color = vec4(col.rgb, col.a * alpha);
 }
 """
@@ -110,6 +115,8 @@ class Explosion:
         else:
             if self._sprite is None:
                 self._sprite = pyglet.sprite.Sprite(img)
+            else:
+                self._sprite.image = img
             self._sprite.scale = self.scale
             self._sprite.position = (self.x, self.y, 0)
             self._sprite.draw()
