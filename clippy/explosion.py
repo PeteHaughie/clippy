@@ -79,6 +79,15 @@ class Explosion:
     def active(self) -> bool:
         return self.playing
 
+    @property
+    def frame_size(self) -> tuple[int, int]:
+        first = self._frames[0]
+        return (first.width, first.height)
+
+    @property
+    def frame_count(self) -> int:
+        return len(self._frames)
+
     def update(self, dt: float):
         if not self.playing:
             return
