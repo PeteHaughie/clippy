@@ -2,11 +2,17 @@
 id: 007
 title: Install Pi locally
 type: task
-status: open
-assignee:
+status: closed
+assignee: petehaughie
 blocked_by: []
 labels: [wayfinder:task]
 ---
+
+## Resolution
+
+Installed by Pete. Verified: `pi` at `/opt/homebrew/bin/pi`, version **0.85.1** on the PATH. No `~/.pi` config directory yet (no provider auth set up — waits on [Demo provider and model]).
+
+Unblocks: [Sub-clippy lifecycle and explosion].
 
 ## Question
 

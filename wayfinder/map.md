@@ -11,10 +11,11 @@ A working local demo on this Mac: **Clippy in a floating always-on-top desktop w
 
 ## Notes
 
-- **Domain:** a desktop companion/animation experiment; Python UI stack (tkinter/pyqt/Toga) for the floating window; Pi (pi.dev) as the coding doer via its RPC/SDK + event stream; OpenAI-compatible endpoint for Clippy's own chat loop.
+- **Domain:** a desktop companion/animation experiment; Python all the way down (per Pete). UI shell = **pyglet 2.x** window + **pyobjc** NSWindow tweaks (transparent framebuffer, `setOpaque:NO`, `clearColor`, no shadow, `CGWindowLevel` floating, `ignoresMouseEvents` pass-through toggle); shell talks to the brain over **sockets**. Pi (pi.dev) as the coding doer via its RPC/SDK + event stream; OpenAI-compatible endpoint for Clippy's own chat loop.
 - **Skills to consult:** `wayfinder` (this), `research`. The `grilling` / `domain-modeling` / `prototype` skills referenced by wayfinder are not installed on this machine — HITL tickets are worked directly with the human. Run `/setup-matt-pocock-skills` if the tracker + those skills are wanted later.
 - **Standing preferences:** sandboxed by default, build mode as a per-conversation toggle; subagent = separate Pi instance; skills reuse the agent-skill format; explosion gif supplied by Pete later.
-- **Explosion gif:** still to be provided by Pete ("will provide later"); sub-clippy tickets should assume the asset arrives, not block on it.
+- **Explosion gif:** now in `assets/` — `Green_Screen_Explosion-ezgif.com-crop.gif`: 180×180, 37 frames @10fps, fully opaque green `(36,252,1)` background → needs chroma-key. Do both: ffmpeg-baked transparent frames (safe path) + live GLSL chroma-key shader (showcase).
+- **Spritesheet:** classic Microsoft Agent Clippy from `pi0/clippy` (jsDelivr mirror) — `map.png` 3348×3162, 124×93 cells, `agent.ts` with 41 animations (Wave/Thinking/GetAttention/Congratulate/GetArtsy/Writing/Greeting + idle sets + RestPose). Proseance: Microsoft IP, fine for local demo, don't ship commercially. Fetch pinned, not `@main`.
 
 ## Decisions so far
 

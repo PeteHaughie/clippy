@@ -3,7 +3,7 @@ id: 003
 title: Floating window with animated avatar
 type: prototype
 status: open
-assignee:
+assignee: wayfinder
 blocked_by: []
 labels: [wayfinder:prototype]
 ---
