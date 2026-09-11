@@ -4,7 +4,7 @@ title: Sub-clippy lifecycle and explosion
 type: prototype
 status: open
 assignee:
-blocked_by: [001, 003]
+blocked_by: [003, 007, 008]
 labels: [wayfinder:prototype]
 ---
 

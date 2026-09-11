@@ -20,14 +20,13 @@ A working local demo on this Mac: **Clippy in a floating always-on-top desktop w
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link for the detail the ticket holds -->
 
+- [Pi drive surface](tickets/001-pi-drive-surface.md): Pi RPC mode (`pi --mode rpc --no-session`) per sub-clippy; one-shot sub-tasks via `pi --mode json -p --no-session`; thinking + tool events stream live; Pi not installed yet (npm install path settled); SDK is Node-only. Graduated [Install Pi locally](tickets/007-install-pi-locally.md) into a task ticket, and unblocked [Sub-clippy lifecycle and explosion](tickets/004-sub-clippy-lifecycle-and-explosion.md)'s dependency on it.
+- [Clippy's own chat loop and skill-as-tool](tickets/002-clippy-chat-loop-and-skill-as-tool.md): official `openai` SDK 2.36.0, Chat Completions; hand-rolled tools loop; SKILL.md frontmatter → function (single free-text `request` arg), `disable-model-invocation` skills excluded; `reasoning_content` optional stream for the bubble. Graduated [Demo provider and model](tickets/008-demo-provider-and-model.md) into a grilling ticket.
+
 ## Not yet specified
 
-- Which specific provider/model sits behind Clippy's own OpenAI-compatible endpoint (and where the API key/config lives).
-- Which starter skills ship with the demo (beyond the format decision).
-- Whether OpenCode must also be a doer for the demo, or Pi alone suffices.
-- Config/secrets layout for Clippy (endpoint, model, Pi invocation).
-- Tkinter vs PyQt vs Toga for the floating window — that's ticket selection, but the *window chrome* (frameless, always-on-top, rounded) is assumed.
-- Whether "sub-clippy articulates current thinking" means streaming Pi's thinking events live into the bubble, or a paraphrase after the fact.
+- Which starter skills ship with the demo (beyond the format decision, now decided in [Clippy's own chat loop and skill-as-tool](tickets/002-clippy-chat-loop-and-skill-as-tool.md)).
+- Config/secrets layout for Clippy (endpoint, model, Pi invocation); the [Demo provider and model](tickets/008-demo-provider-and-model.md) grilling pins the first half.
 
 ## Out of scope
 
