@@ -127,7 +127,7 @@
         <button class="btn" disabled title="inert in spike">✕</button>
       </div>
       <div class="dialog-body">
-        <div class="chat">
+        <div class="chat" id="chat">
           <div class="msg you">Where are we heading today?</div>
           <div class="msg clippy">Mapping the route. Here's the plan:</div>
           <div class="msg clippy img">
@@ -151,12 +151,12 @@
         </div>
         <div class="statusbar">
           <span id="jsstate">JS booting…</span>
-          <span>spike · non-interactive</span>
+          <span>spike · bridge active</span>
         </div>
       </div>
       <div class="input-bar">
-        <input type="text" placeholder="type a message… (inert in spike)" disabled>
-        <button class="btn" disabled>Send</button>
+        <input type="text" id="chatinput" placeholder="type a message…">
+        <button class="btn" id="sendbtn" type="button">Send</button>
       </div>
     </dialog>
     <div class="pane-gutter"></div>
@@ -165,12 +165,53 @@
   const prog = document.getElementById('prog');
   const progv = document.getElementById('progv');
   const jsstate = document.getElementById('jsstate');
+  const chat = document.getElementById('chat');
+  const input = document.getElementById('chatinput');
+  const BRIDGE = 'clippy';
+
+  function bridgeOK() {
+    return window.webkit && window.webkit.messageHandlers &&
+      window.webkit.messageHandlers[BRIDGE];
+  }
+  function post(type, payload) {
+    if (!bridgeOK()) return false;
+    window.webkit.messageHandlers[BRIDGE].postMessage(
+      JSON.stringify(Object.assign({ type: type }, payload || {})));
+    return true;
+  }
+  function addMessage(role, text) {
+    const d = document.createElement('div');
+    d.className = 'msg ' + (role === 'you' ? 'you' : 'clippy');
+    d.textContent = text;
+    chat.appendChild(d);
+    chat.scrollTop = chat.scrollHeight;
+  }
+  function send() {
+    const t = input.value.trim();
+    if (!t) return;
+    addMessage('you', t);
+    input.value = '';
+    jsstate.textContent = post('chat', { text: t }) ? 'sent…' : 'no bridge';
+  }
+
   jsstate.textContent = 'JS BOOTED';   // synchronous, timer-independent proof
+  window.__addMessage = addMessage;
+  window.__focusInput = function () { input.focus(); };
   window.__setProgress = function (v) {
     prog.value = Math.round(v);
     progv.textContent = Math.round(v) + '%';
     jsstate.textContent = 'JS LIVE ' + Math.round(v) + '%';
   };
+  // Mock user message: exercises JS -> bridge -> Python -> JS round trip.
+  window.__sendMock = function (text) {
+    const t = text || 'hello from js (mock user)';
+    addMessage('you', t);
+    post('chat', { text: t });
+  };
+  sendbtn.addEventListener('click', send);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); send(); }
+  });
   let val = 0, dir = 1;
   setInterval(() => {
     val += dir * 5;
