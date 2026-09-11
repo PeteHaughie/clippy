@@ -108,15 +108,16 @@ class Explosion:
     def _render_keyed(self, img, tw, th):
         img.bind()
         with self._program:
-            self._program.set_uniform("u_key_color", (*KEY_COLOR, 1.0))
-            self._program.set_uniform("u_similarity", float(SIMILARITY))
-            self._program.set_uniform("u_smoothness", float(SMOOTHNESS))
+            self._program["u_key_color"] = KEY_COLOR
+            self._program["u_similarity"] = float(SIMILARITY)
+            self._program["u_smoothness"] = float(SMOOTHNESS)
             ox, oy = self.x, self.y
-            vertices = (ox, oy, ox + tw, oy, ox + tw, oy + th, ox, oy + th)
+            positions = (ox, oy, ox + tw, oy, ox + tw, oy + th, ox, oy + th)
             tex_coords = (0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0)
-            vlist = pyglet.graphics.vertex_list(
-                4,
-                ("in_position", ("f", vertices)),
-                ("in_tex_coords", ("f", tex_coords)),
+            vlist = self._program.vertex_list(
+                4, gl.GL_TRIANGLE_FAN,
+                a_position=("f", positions),
+                a_tex_coords=("f", tex_coords),
             )
-            vlist.draw(gl.GL_QUADS)
+            vlist.draw(gl.GL_TRIANGLE_FAN)
+            vlist.delete()

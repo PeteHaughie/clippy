@@ -9,7 +9,7 @@ from .explosion import Explosion
 
 
 class ClippyShell(Window):
-    def __init__(self, scale: float = 3.0, live_key: bool = True):
+    def __init__(self, scale: float = 3.0, live_key: bool = True, position=(60, 420)):
         self.avatar = Avatar(scale=scale)
         self.explosion = Explosion(live_key=live_key, scale=scale)
         padding = 20
@@ -23,13 +23,15 @@ class ClippyShell(Window):
             style=Window.WINDOW_STYLE_OVERLAY,
             visible=False,
         )
-        self.set_location(60, 420)
+        self.set_location(*position)
         self.set_mouse_passthrough(True)
         self.passthrough = True
         self.fps = FPSDisplay(window=self)
         self.thinking = False
+        self._bubble = ""
+        self.on_delegate = None
         self.label = pyglet.text.Label(
-            "I'd like to help! (press : for menu)",
+            "",
             font_name="Helvetica",
             font_size=10,
             color=(255, 255, 255, 255),
@@ -54,6 +56,15 @@ class ClippyShell(Window):
             self.thinking = False if mood != "thinking" else True
         return accepted
 
+    def set_bubble(self, text: str):
+        """Replace the speech-bubble line shown above the avatar."""
+        self._bubble = text
+
+    def dismiss(self):
+        """Close this window (used after the sub-clippy explosion)."""
+        self.set_visible(False)
+        self.close()
+
     def on_key_press(self, symbol, modifiers):
         if symbol == pyglet.window.key.P:
             self.toggle_passthrough()
@@ -64,6 +75,8 @@ class ClippyShell(Window):
             self.express("thinking" if self.thinking else "idle")
         elif symbol == pyglet.window.key.E:
             self.explosion.trigger()
+        elif symbol == pyglet.window.key.D and self.on_delegate is not None:
+            self.on_delegate()
         elif symbol == pyglet.window.key.Q:
             pyglet.app.exit()
         else:
@@ -80,8 +93,9 @@ class ClippyShell(Window):
         self.label.x = pad
         self.label.y = int(pad + self.avatar.frame_h * self.avatar.scale) + 6
         mood = self.avatar.current_mood
+        bubble = self._bubble.replace("\n", " ") if self._bubble else "(press D to delegate)"
         self.label.text = (
-            f"mood: {mood} (P pass / T think / E explode / Q quit)"
+            f"mood:{mood} · {bubble} (P pass / T think / E explode / D delegate / Q quit)"
         )
         self.label.draw()
         self.fps.draw()

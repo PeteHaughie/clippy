@@ -5,11 +5,16 @@ Controls:
   T  toggle Thinking / RestPose animation
   Space  Wave
   E  trigger the explosion
+  D  delegate a task to a sub-clippy (spawns a second floating window)
   Q  quit
 
 Flags:
   --mood <name> [--hint <hint>]  drive a single mood once, then quit
   --moodcycle                    play every mood in sequence, then quit
+  --delegate "<task>"            summon a sub-clippy for this task at startup
+  --real                         force the real Pi sub-agent (oMLX) instead of
+                                 auto-falling back to the mock
+  --model <omlx/model>           which oMLX model the real sub-agent uses
 """
 
 import argparse
@@ -18,15 +23,57 @@ import sys
 import pyglet
 
 from clippy.avatar import Avatar
+from clippy.controller import SubClippyController
 from clippy.moods import Moods
 from clippy.shell import ClippyShell
+from clippy.subagent import (
+    DEFAULT_MODEL,
+    DEFAULT_TASK,
+    MockSubAgent,
+    PiSubAgent,
+    pi_ready,
+)
 
 ONE_SHOT_HOLD = 1.5  # seconds after a one-shot mood before moving on
+
+PRIME_POS = (60, 420)
+SUB_POS = (560, 420)
 
 
 def duration_of(avatar: Avatar, name: str) -> float:
     anim = avatar.animations[name]
     return sum(fr["duration"] for fr in anim["frames"]) / 1000.0
+
+
+class Delegator:
+    """Owns the one sub-clippy the demo allows at a time."""
+
+    def __init__(self, prime: ClippyShell, real: bool, model: str):
+        self.prime = prime
+        self.real = real
+        self.model = model
+        self.controller = None
+
+    def _spawn(self, task: str) -> SubClippyController:
+        if self.real or pi_ready():
+            agent = PiSubAgent(task=task, model=self.model)
+            print(f"[clippy] delegating to PI sub-agent ({self.model})")
+        else:
+            agent = MockSubAgent(task=task)
+            print("[clippy] PI not ready — delegating to mock sub-agent")
+        shell = ClippyShell(position=SUB_POS)
+        ctrl = SubClippyController(shell, agent)
+        shell.show()
+        pyglet.clock.schedule_interval(shell.update, 1 / 60)
+        pyglet.clock.schedule_interval(ctrl.update, 1 / 60)
+        agent.start()
+        return ctrl
+
+    def delegate(self, task: str = DEFAULT_TASK):
+        if self.controller is not None:
+            print("[clippy] already delegating")
+            return
+        self.controller = self._spawn(task)
 
 
 def main() -> int:
@@ -36,11 +83,22 @@ def main() -> int:
     parser.add_argument("--mood", help="play one mood then quit")
     parser.add_argument("--hint", help="activity hint for --mood")
     parser.add_argument("--moodcycle", action="store_true", help="play every mood in sequence then quit")
+    parser.add_argument("--delegate", help="summon a sub-clippy for this task at startup")
+    parser.add_argument("--real", action="store_true", help="force the real Pi sub-agent")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="omlx model for the real sub-agent")
     args = parser.parse_args()
 
     shell = ClippyShell(scale=args.scale, live_key=not args.no_shader)
     shell.show()
     pyglet.clock.schedule_interval(shell.update, 1 / 60)
+
+    if args.delegate:
+        delegator = Delegator(shell, real=args.real, model=args.model)
+        shell.on_delegate = lambda: delegator.delegate()
+        delegator.delegate(args.delegate)
+    else:
+        delegator = Delegator(shell, real=args.real, model=args.model)
+        shell.on_delegate = lambda: delegator.delegate()
 
     moods = shell.avatar.moods
 
