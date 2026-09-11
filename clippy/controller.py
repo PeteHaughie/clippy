@@ -158,7 +158,7 @@ class SubClippyController:
             self._timers["celebrate"] -= dt
             if self._timers["celebrate"] <= 0:
                 self.state = "exploding"
-                self.shell.explosion.trigger()
+                self.shell.trigger_explosion()
         elif self.state == "exploding":
             if not self.shell.explosion.active:
                 self._timers["dismiss"] = DISMISS_DELAY

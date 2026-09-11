@@ -27,6 +27,7 @@ class ClippyShell(Window):
         self.set_mouse_passthrough(True)
         self.passthrough = True
         self.fps = FPSDisplay(window=self)
+        self._exploded = False
         self.thinking = False
         self._bubble = ""
         self.label = pyglet.text.Label(
@@ -64,6 +65,12 @@ class ClippyShell(Window):
         self.set_visible(False)
         self.close()
 
+    def trigger_explosion(self):
+        """Start the blast and retire the avatar for good so the explosion
+        hands over cleanly: no clippy sprite lingering in or after the fire."""
+        self.explosion.trigger()
+        self._exploded = True
+
     def on_key_press(self, symbol, modifiers):
         if symbol == pyglet.window.key.P:
             self.toggle_passthrough()
@@ -73,7 +80,7 @@ class ClippyShell(Window):
             self.thinking = not self.thinking
             self.express("thinking" if self.thinking else "idle")
         elif symbol == pyglet.window.key.E:
-            self.explosion.trigger()
+            self.trigger_explosion()
         elif symbol == pyglet.window.key.Q:
             pyglet.app.exit()
         else:
@@ -82,8 +89,9 @@ class ClippyShell(Window):
     def on_draw(self):
         self.clear()
         pad = 20
-        self.avatar.sprite.position = (pad, pad, 0)
-        self.avatar.draw()
+        if not self._exploded:
+            self.avatar.sprite.position = (pad, pad, 0)
+            self.avatar.draw()
         self.explosion.x = pad
         self.explosion.y = pad
         self.explosion.draw()
