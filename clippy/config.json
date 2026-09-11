@@ -1,0 +1,63 @@
+{
+  "idle": {
+    "settle": "RestPose",
+    "initial_delay_sec": 10,
+    "rotate_interval_sec": 45,
+    "pool": [
+      "IdleAtom",
+      "IdleSideToSide",
+      "IdleFingerTap",
+      "IdleRopePile",
+      "IdleHeadScratch",
+      "IdleEyeBrowRaise",
+      "IdleSnooze"
+    ]
+  },
+  "moods": {
+    "thinking": {
+      "continuous": true,
+      "animations": ["Thinking", "Processing"]
+    },
+    "working": {
+      "continuous": true,
+      "hints": {
+        "build": "GetTechy",
+        "write": "Writing",
+        "read": "CheckingSomething",
+        "search": "Searching",
+        "mail": "SendMail",
+        "print": "Print",
+        "save": "Save",
+        "artsy": "GetArtsy",
+        "wizard": "GetWizardy",
+        "explain": "Explain",
+        "show": "Show"
+      }
+    },
+    "listening": {
+      "continuous": true,
+      "animations": ["Hearing_1"]
+    },
+    "greeting": {
+      "continuous": false,
+      "animations": ["Greeting", "Wave", "GetAttention"]
+    },
+    "farewell": {
+      "continuous": false,
+      "animations": ["GoodBye"]
+    },
+    "celebrate": {
+      "continuous": false,
+      "animations": ["Congratulate"]
+    },
+    "confused": {
+      "continuous": false,
+      "animations": ["IdleHeadScratch"]
+    },
+    "alert": {
+      "continuous": false,
+      "interrupt_ok": true,
+      "animations": ["Alert"]
+    }
+  }
+}

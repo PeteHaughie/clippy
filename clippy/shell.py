@@ -47,20 +47,27 @@ class ClippyShell(Window):
         self.set_mouse_passthrough(self.passthrough)
         print(f"[clippy] click-through = {self.passthrough}")
 
+    def express(self, mood: str, hint: str | None = None, text: str | None = None):
+        """Drive the avatar's mood (future controller / socket entry point)."""
+        accepted = self.avatar.express(mood, hint)
+        if text is not None:
+            self.thinking = False if mood != "thinking" else True
+        return accepted
+
     def on_key_press(self, symbol, modifiers):
         if symbol == pyglet.window.key.P:
             self.toggle_passthrough()
         elif symbol == pyglet.window.key.SPACE:
-            self.avatar.play("Wave")
+            self.express("greeting", hint=None)
         elif symbol == pyglet.window.key.T:
             self.thinking = not self.thinking
-            self.avatar.play("Thinking" if self.thinking else "RestPose")
+            self.express("thinking" if self.thinking else "idle")
         elif symbol == pyglet.window.key.E:
             self.explosion.trigger()
         elif symbol == pyglet.window.key.Q:
             pyglet.app.exit()
         else:
-            self.avatar.play("GetAttention")
+            self.express("greeting", hint=None)
 
     def on_draw(self):
         self.clear()
@@ -72,8 +79,9 @@ class ClippyShell(Window):
         self.explosion.draw()
         self.label.x = pad
         self.label.y = int(pad + self.avatar.frame_h * self.avatar.scale) + 6
+        mood = self.avatar.current_mood
         self.label.text = (
-            "computing…" if self.thinking else "I'd like to help! (P pass / T think / E explode / Q quit)"
+            f"mood: {mood} (P pass / T think / E explode / Q quit)"
         )
         self.label.draw()
         self.fps.draw()
