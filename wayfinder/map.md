@@ -23,6 +23,7 @@ A working local demo on this Mac: **Clippy in a floating always-on-top desktop w
 
 - [Pi drive surface](tickets/001-pi-drive-surface.md): Pi RPC mode (`pi --mode rpc --no-session`) per sub-clippy; one-shot sub-tasks via `pi --mode json -p --no-session`; thinking + tool events stream live; Pi not installed yet (npm install path settled); SDK is Node-only. Graduated [Install Pi locally](tickets/007-install-pi-locally.md) into a task ticket, and unblocked [Sub-clippy lifecycle and explosion](tickets/004-sub-clippy-lifecycle-and-explosion.md)'s dependency on it.
 - [Clippy's own chat loop and skill-as-tool](tickets/002-clippy-chat-loop-and-skill-as-tool.md): official `openai` SDK 2.36.0, Chat Completions; hand-rolled tools loop; SKILL.md frontmatter → function (single free-text `request` arg), `disable-model-invocation` skills excluded; `reasoning_content` optional stream for the bubble. Graduated [Demo provider and model](tickets/008-demo-provider-and-model.md) into a grilling ticket.
+- [Floating window with animated avatar](tickets/003-floating-window-with-animated-avatar.md): **pyglet 2.1 + pyobjc** for the window shell — `WINDOW_STYLE_OVERLAY` gives transparent framebuffer + always-on-top + click-through natively; shell↔brain will be sockets. Classic Clippy spritesheet from `pi0/clippy` (43 animations, 124×93 cells). Explosion pre-baked + live GLSL chroma-key shader. Stack is locked.
 
 ## Not yet specified
 
