@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clippy Chat — spike</title>
+<link rel="stylesheet" href="../vendor/95css/95css.min.css">
+<style>
+  html, body {
+    background: transparent;
+    margin: 0;
+    font-size: 13px;
+  }
+  .pane {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  dialog.app {
+    position: static;
+    margin: 0;
+    width: 100%;
+    height: 88%;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    border: none;
+    color: #222;
+  }
+  .pane-gutter {
+    flex: 1;
+    background: transparent;
+  }
+  .dialog-header {
+    background: #000080;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    font-size: 13px;
+    flex: 0 0 auto;
+  }
+  .dialog-header .ico {
+    width: 16px;
+    height: 16px;
+    background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23ffff00'/><g fill='%23000000'><rect x='2' y='2' width='12' height='12' fill='none' stroke='%23000000'/><rect x='4' y='4' width='8' height='7'/><rect x='4' y='12' width='2' height='2'/><rect x='10' y='12' width='2' height='2'/></g></svg>") no-repeat center;
+  }
+  .dialog-header .title {
+    flex: 1;
+  }
+  .dialog-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 8px;
+    overflow: hidden;
+    background: #c0c0c0;
+  }
+  .chat {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+  .msg {
+    max-width: 92%;
+    margin: 4px 0;
+    padding: 5px 7px;
+    word-wrap: break-word;
+    background: #fff;
+    border: 1px solid #808080;
+    box-shadow: 1px 1px 0 #fff inset, -1px -1px 0 #808080 inset;
+  }
+  .msg.you { margin-left: auto; background: #ffffe1; }
+  .msg.img { padding: 3px; background: #c0c0c0; }
+  .msg.img img { width: 100%; height: auto; image-rendering: pixelated; }
+  fieldset {
+    font-size: 13px;
+  }
+  .progress-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  progress { width: 100%; }
+  output { font-size: 12px; min-width: 34px; text-align: right; }
+  .tabs { display: flex; gap: 2px; margin-top: 8px; }
+  .tabs .tab {
+    font-size: 12px;
+    padding: 2px 8px;
+    cursor: default;
+  }
+  .statusbar {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    border: 1px solid #808080;
+    box-shadow: 1px 1px 0 #fff inset, -1px -1px 0 #d4d0c8 inset;
+    background: #c0c0c0;
+    padding: 2px 5px;
+    margin-top: 6px;
+    font-size: 12px;
+  }
+  #jsstate { color: #008000; }
+  .input-bar {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 6px;
+    padding: 8px;
+    background: #c0c0c0;
+  }
+  .input-bar input {
+    flex: 1;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+  <div class="pane">
+    <dialog open class="app" aria-label="Clippy Chat">
+      <div class="dialog-header">
+        <span class="ico"></span>
+        <span class="title">Clippy Chat</span>
+        <button class="btn" disabled title="inert in spike">✕</button>
+      </div>
+      <div class="dialog-body">
+        <div class="chat">
+          <div class="msg you">Where are we heading today?</div>
+          <div class="msg clippy">Mapping the route. Here's the plan:</div>
+          <div class="msg clippy img">
+            <img src="../clippy/map.png" alt="route map">
+          </div>
+          <div class="msg clippy">
+            <fieldset>
+              <legend>Quick action</legend>
+              <div class="m-b-2"><select><option selected>— pick a hub —</option><option>Studio</option><option>Practice</option><option>Lab</option></select></div>
+              <div class="progress-row">
+                <progress id="prog" max="100" value="0"></progress>
+                <output id="progv">0%</output>
+              </div>
+              <div class="tabs">
+                <button class="tab is-active" type="button">Map</button>
+                <button class="tab" type="button">Audio</button>
+                <button class="tab" type="button">Video</button>
+              </div>
+            </fieldset>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span id="jsstate">JS booting…</span>
+          <span>spike · non-interactive</span>
+        </div>
+      </div>
+      <div class="input-bar">
+        <input type="text" placeholder="type a message… (inert in spike)" disabled>
+        <button class="btn" disabled>Send</button>
+      </div>
+    </dialog>
+    <div class="pane-gutter"></div>
+  </div>
+<script>
+  const prog = document.getElementById('prog');
+  const progv = document.getElementById('progv');
+  const jsstate = document.getElementById('jsstate');
+  jsstate.textContent = 'JS BOOTED';   // synchronous, timer-independent proof
+  window.__setProgress = function (v) {
+    prog.value = Math.round(v);
+    progv.textContent = Math.round(v) + '%';
+    jsstate.textContent = 'JS LIVE ' + Math.round(v) + '%';
+  };
+  let val = 0, dir = 1;
+  setInterval(() => {
+    val += dir * 5;
+    if (val >= 100) { val = 100; dir = -1; }
+    if (val <= 0) { val = 0; dir = 1; }
+    window.__setProgress(val);
+  }, 400);
+</script>
+</body>
+</html>
