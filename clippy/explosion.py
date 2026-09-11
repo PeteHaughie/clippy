@@ -123,6 +123,8 @@ class Explosion:
 
     def _render_keyed(self, img, tw, th):
         img.bind()
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         with self._program:
             self._program["u_key_color"] = KEY_COLOR
             self._program["u_similarity"] = float(SIMILARITY)
@@ -137,3 +139,4 @@ class Explosion:
             )
             vlist.draw(gl.GL_TRIANGLE_FAN)
             vlist.delete()
+        gl.glDisable(gl.GL_BLEND)
