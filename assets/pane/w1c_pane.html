@@ -3,16 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Clippy Chat — spike (95CSS, archived)</title>
-<!-- HISTORICAL (ticket 014): the 95CSS stylesheet was removed at the w1c pivot.
-     This file is kept as the 011 A/B control; see tickets 010/011 for the
-     runnable state, or w1c_pane.html for the current pane. -->
-<link rel="stylesheet" href="../vendor/95css/95css.min.css">
+<title>Clippy Chat — w1c spike</title>
+<link rel="stylesheet" href="vendor/w1c/w1c.css">
+<script src="vendor/w1c/w1c.bundle.js"></script>
+<script>
+  // Instrumentation (probe harness): body[data-w1c] reports bundle load/upgrade state.
+  document.body.dataset.w1c = 'bundle-empty';
+  window.addEventListener('error', function (e) {
+    document.body.dataset.w1c = 'pg-err ' + e.message;
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    document.body.dataset.w1c = 'pg-reject ' + String(e.reason);
+  });
+</script>
 <style>
   html, body {
     background: transparent;
     margin: 0;
+    height: 100%;
+    overflow: hidden;
     font-size: 13px;
+  }
+  body {
+    font: 13px/1.3 var(--w1c-font-ui, 'MS Sans Serif', Tahoma, sans-serif);
+    color: var(--w1c-control-text, #000);
   }
   .pane {
     width: 100vw;
@@ -20,51 +34,35 @@
     display: flex;
     flex-direction: column;
   }
-  dialog.app {
-    position: static;
-    margin: 0;
-    width: 100%;
+  w1c-window.app {
     height: 88%;
+    --w1c-window-content-padding: 0px;
+  }
+  w1c-window.app::part(content) {
     display: flex;
     flex-direction: column;
-    padding: 0;
-    border: none;
-    color: #222;
   }
   .pane-gutter {
     flex: 1;
     background: transparent;
   }
-  .dialog-header {
-    background: #000080;
-    color: #fff;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 6px;
-    font-size: 13px;
-    flex: 0 0 auto;
-  }
-  .dialog-header .ico {
+  .ico {
     width: 16px;
     height: 16px;
+    display: inline-block;
     background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23ffff00'/><g fill='%23000000'><rect x='2' y='2' width='12' height='12' fill='none' stroke='%23000000'/><rect x='4' y='4' width='8' height='7'/><rect x='4' y='12' width='2' height='2'/><rect x='10' y='12' width='2' height='2'/></g></svg>") no-repeat center;
   }
-  .dialog-header .title {
+  .pane-body {
     flex: 1;
-  }
-  .dialog-body {
-    flex: 1;
+    min-height: 0;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    padding: 8px;
-    overflow: hidden;
-    background: #c0c0c0;
   }
   .chat {
     flex: 1;
     overflow-y: auto;
-    padding-right: 2px;
+    padding: 6px;
   }
   .msg {
     max-width: 92%;
@@ -78,8 +76,9 @@
   .msg.you { margin-left: auto; background: #ffffe1; }
   .msg.img { padding: 3px; background: #c0c0c0; }
   .msg.img img { width: 100%; height: auto; image-rendering: pixelated; }
-  fieldset {
-    font-size: 13px;
+  .card {
+    margin: 0 6px 6px;
+    padding: 6px;
   }
   .progress-row {
     display: flex;
@@ -87,49 +86,39 @@
     gap: 6px;
     margin-top: 6px;
   }
-  progress { width: 100%; }
-  output { font-size: 12px; min-width: 34px; text-align: right; }
-  .tabs { display: flex; gap: 2px; margin-top: 8px; }
-  .tabs .tab {
-    font-size: 12px;
-    padding: 2px 8px;
-    cursor: default;
+  progress {
+    width: 100%;
+    height: 14px;
+    border: 1px solid #808080;
+    box-shadow: 1px 1px 0 #fff inset, -1px -1px 0 #d4d0c8 inset;
+    background: #fff;
+    color: #000080;
   }
+  progress::-webkit-progress-bar { background: #fff; }
+  progress::-webkit-progress-value { background: #000080; }
+  output { font-size: 12px; min-width: 34px; text-align: right; }
   .statusbar {
-    flex: 0 0 auto;
     display: flex;
     gap: 8px;
     align-items: center;
-    border: 1px solid #808080;
-    box-shadow: 1px 1px 0 #fff inset, -1px -1px 0 #d4d0c8 inset;
-    background: #c0c0c0;
-    padding: 2px 5px;
-    margin-top: 6px;
-    font-size: 12px;
   }
   #jsstate { color: #008000; }
   .input-bar {
-    flex: 0 0 auto;
     display: flex;
     gap: 6px;
-    padding: 8px;
-    background: #c0c0c0;
+    padding: 6px;
+    border-top: 1px solid #808080;
+    box-shadow: inset 0 1px 0 #fff;
   }
-  .input-bar input {
-    flex: 1;
-    font-size: 13px;
-  }
+  w1c-input#chatinput { flex: 1; }
 </style>
 </head>
 <body>
   <div class="pane">
-    <dialog open class="app" aria-label="Clippy Chat">
-      <div class="dialog-header">
-        <span class="ico"></span>
-        <span class="title">Clippy Chat</span>
-        <button class="btn" disabled title="inert in spike">✕</button>
-      </div>
-      <div class="dialog-body">
+    <w1c-window class="app" title="Clippy Chat">
+      <span slot="icon" class="ico"></span>
+      <div slot="toolbar" hidden></div>
+      <div class="pane-body">
         <div class="chat" id="chat">
           <div class="msg you">Where are we heading today?</div>
           <div class="msg clippy">Mapping the route. Here's the plan:</div>
@@ -137,31 +126,36 @@
             <img src="../clippy/map.png" alt="route map">
           </div>
           <div class="msg clippy">
-            <fieldset>
-              <legend>Quick action</legend>
-              <div class="m-b-2"><select><option selected>— pick a hub —</option><option>Studio</option><option>Practice</option><option>Lab</option></select></div>
+            <div class="card">
+              <label>Quick action hub</label>
+              <div class="m-b-2">
+                <w1c-select><option selected>— pick a hub —</option><option>Studio</option><option>Practice</option><option>Lab</option></w1c-select>
+              </div>
               <div class="progress-row">
                 <progress id="prog" max="100" value="0"></progress>
                 <output id="progv">0%</output>
               </div>
-              <div class="tabs">
-                <button class="tab is-active" type="button">Map</button>
-                <button class="tab" type="button">Audio</button>
-                <button class="tab" type="button">Video</button>
-              </div>
-            </fieldset>
+              <w1c-tabs style="margin-top:8px">
+                <button slot="tabs" type="button">Map</button>
+                <button slot="tabs" type="button">Audio</button>
+                <button slot="tabs" type="button">Video</button>
+                <div role="tabpanel">Map view — room grid + sensors.</div>
+                <div role="tabpanel">Audio — mic levels + faders.</div>
+                <div role="tabpanel">Video — camera feeds + timestamps.</div>
+              </w1c-tabs>
+            </div>
           </div>
         </div>
-        <div class="statusbar">
-          <span id="jsstate">JS booting…</span>
-          <span>spike · bridge active</span>
-        </div>
       </div>
+      <span slot="statusbar" class="statusbar">
+        <span id="jsstate">JS booting…</span>
+        <span>w1c · bridge active</span>
+      </span>
       <div class="input-bar">
-        <input type="text" id="chatinput" placeholder="type a message…">
-        <button class="btn" id="sendbtn" type="button">Send</button>
+        <w1c-input id="chatinput" placeholder="type a message…"></w1c-input>
+        <w1c-button id="sendbtn">Send</w1c-button>
       </div>
-    </dialog>
+    </w1c-window>
     <div class="pane-gutter"></div>
   </div>
 <script>
@@ -190,7 +184,7 @@
     chat.scrollTop = chat.scrollHeight;
   }
   function send() {
-    const t = input.value.trim();
+    const t = input.value ? String(input.value).trim() : '';
     if (!t) return;
     addMessage('you', t);
     input.value = '';
@@ -199,7 +193,7 @@
 
   jsstate.textContent = 'JS BOOTED';   // synchronous, timer-independent proof
   window.__addMessage = addMessage;
-  window.__focusInput = function () { input.focus(); };
+  window.__focusInput = function () { input.focus({ preventScroll: true }); };
   window.__setProgress = function (v) {
     prog.value = Math.round(v);
     progv.textContent = Math.round(v) + '%';
@@ -211,12 +205,24 @@
     addMessage('you', t);
     post('chat', { text: t });
   };
+  // Prove the w1c bundle actually registered our components.
+  if (customElements.get('w1c-window')) {
+    document.body.dataset.w1c = 'ready';
+  } else {
+    customElements.whenDefined('w1c-window')
+      .then(() => { document.body.dataset.w1c = 'ready'; jsstate.textContent = 'W1C READY'; })
+      .catch(() => { document.body.dataset.w1c = 'define-fail'; });
+    setTimeout(() => {
+      if (document.body.dataset.w1c === 'bundle-empty') document.body.dataset.w1c = 'bundle-silent';
+    }, 1000);
+  }
   sendbtn.addEventListener('click', send);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); send(); }
   });
   let val = 0, dir = 1;
   setInterval(() => {
+    if (window.__paused) return;
     val += dir * 5;
     if (val >= 100) { val = 100; dir = -1; }
     if (val <= 0) { val = 0; dir = 1; }

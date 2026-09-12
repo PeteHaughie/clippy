@@ -1,15 +1,10 @@
-"""Interactive pane (ticket 011): JS<->Python bridge on the 95CSS chat pane.
+"""Interactive pane (ticket 014): JS<->Python bridge on the w1c chat pane.
 
-HISTORICAL ARTIFACT (post ticket 014): this is the 011-proven 95CSS harness,
-kept as the A/B control. Its stylesheet (assets/pane/vendor/95css) was
-deliberately deleted at the w1c pivot — git history / ticket 010 hold the
-vendored CSS and the runnable state. See w1c_pane_spike.py for the current
-pane.
-
-Builds on the 010 rendering spike. The pane's HTML now exposes a typed input
-and a script-message channel (window.webkit.messageHandlers.clippy). Python
-receives messages via a WKScriptMessageHandler delegate and answers via
-evaluateJavaScript; a scripted mock round-trip exercises the full loop.
+Same harness as html_pane_spike.py (ticket 011) but the pane html is rendered
+with the vendored @w1c/components library (Lit custom elements + windows-95
+theme) instead of 95CSS classes. Proves: w1c bundle boots inside WKWebView,
+theme chrome paints, the exact 011 bridge contract still round-trips, typing
+and live repaint work.
 
 Repaint lever (010 finding: background non-activating panels freeze WKWebView
 compositing):  ``--mode active`` (default) activates the app + key-capable
@@ -56,7 +51,7 @@ import pyglet
 from clippy.shell import ClippyShell
 
 REPO_ROOT = Path(__file__).resolve().parent
-PANE_HTML = REPO_ROOT / "assets" / "pane" / "spike_pane.html"
+PANE_HTML = REPO_ROOT / "assets" / "pane" / "w1c_pane.html"
 ASSETS_DIR = REPO_ROOT / "assets"
 
 PANE_W, PANE_H = 340, 460  # points; Retina scales pixels x2 for capture
@@ -88,7 +83,7 @@ class BridgeHandler(NSObject):
 
 
 class Pane:
-    """Transparent floating WKWebView panel loading the 95CSS pane html."""
+    """Transparent floating WKWebView panel loading the w1c pane html."""
 
     def __init__(self, shell: ClippyShell, mode: str = "active", diag: str | None = None,
                  selftest: bool = False):
@@ -307,6 +302,10 @@ class Pane:
         js = (
             "JSON.stringify({"
             "  value: document.getElementById('chatinput').value,"
+            "  inner: (document.getElementById('chatinput').shadowRoot"
+            "      ? document.getElementById('chatinput').shadowRoot.querySelector('input').value"
+            "      : 'no-shadow'),"
+            "  active: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : 'none',"
             "  echoed: [...document.querySelectorAll('.msg.clippy')]"
             "      .some(m => m.textContent.includes('echo: hi from keyboard'))"
             "})"

@@ -17,7 +17,8 @@ Legend: ✅ closed · ⬜ open but blocked · 👀 open/unblocked/unclaimed (tak
 | 009 | Contextual animation moods + agent API | prototype | ✅ | — | [009-contextual-animation-moods-and-agent-api.md](tickets/009-contextual-animation-moods-and-agent-api.md) |
 | 010 | HTML/CSS/JS pane spike (95CSS) | prototype | ✅ | — | [010-html-css-js-pane-spike.md](tickets/010-html-css-js-pane-spike.md) |
 | 011 | Interactive pane: JS↔Python bridge | prototype | ✅ | — | [011-interactive-pane-bridge.md](tickets/011-interactive-pane-bridge.md) |
-| 012 | 95CSS styled knowledge graph (+ resolver port) | grilling | ⬜ | 002 | [012-95css-styled-knowledge-graph.md](tickets/012-95css-styled-knowledge-graph.md) |
-| 013 | Ephemeral card pipeline in the pane | prototype | ⬜ | 011, 012 | [013-ephemeral-card-pipeline.md](tickets/013-ephemeral-card-pipeline.md) |
+| 012 | w1c knowledge graph (+ resolver port) | grilling | ⬜ | 002 | [012-95css-styled-knowledge-graph.md](tickets/012-95css-styled-knowledge-graph.md) |
+| 013 | Ephemeral card pipeline in the pane | prototype | ⬜ | 002 | [013-ephemeral-card-pipeline.md](tickets/013-ephemeral-card-pipeline.md) |
+| 014 | w1c pane spike (web components, windows-95 theme) | prototype | ✅ | — | [014-w1c-pane-spike.md](tickets/014-w1c-pane-spike.md) |
 
 **Frontier (takeable next):** 🅿️ 005 parked · 👀 **002** (chat loop + skill-as-tool) is the last research-only backlog item and unblocks 012; **012** (graph + resolver port) is takeable once 002 lands.
