@@ -1,6 +1,7 @@
 {
   "idle": {
     "settle": "RestPose",
+    "rotate": false,
     "initial_delay_sec": 10,
     "rotate_interval_sec": 45,
     "pool": [

@@ -1,5 +1,11 @@
-"""The floating Clippy window: transparent, always-on-top, click-through
-off by default and toggleable. Hosts the animated avatar and the explosion."""
+"""The floating Clippy window: transparent, always-on-top, draggable.
+
+Hosts the animated avatar and the explosion, and exposes the position API
+(:meth:`ClippyShell.position` / :meth:`ClippyShell.move_to` /
+:meth:`ClippyShell.move_to_spot`) so Clippy knows where he is on screen and
+can be asked (by the user or the brain) to move himself around. The old
+click-through mode is still available via :meth:`ClippyShell.toggle_passthrough`
+but is off by default so the window can be grabbed and dragged."""
 
 import pyglet
 from pyglet.window import FPSDisplay, Window
@@ -24,8 +30,7 @@ class ClippyShell(Window):
             visible=False,
         )
         self.set_location(*position)
-        self.set_mouse_passthrough(True)
-        self.passthrough = True
+        self.passthrough = False
         self.fps = FPSDisplay(window=self)
         self._exploded = False
         self.thinking = False
@@ -53,6 +58,102 @@ class ClippyShell(Window):
         self.set_mouse_passthrough(self.passthrough)
         print(f"[clippy] click-through = {self.passthrough}")
 
+    # ------------------------------------------------------- position API
+    # Screen coordinates follow pyglet's convention: (x, y) is the window's
+    # top-left corner, y grows *downward* from the top of the screen.
+
+    @property
+    def position(self) -> tuple[int, int]:
+        """Where Clippy's top-left corner is on screen, ``(x, y)``."""
+        return self.get_location()
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """Clippy's window footprint, ``(width, height)``."""
+        return self.width, self.height
+
+    def visible_screen(self):
+        """The AppKit screen the window currently sits on (None if unknown)."""
+        ns = getattr(self, "_nswindow", None)
+        if ns is None:
+            return None
+        try:
+            return ns.screen()
+        except Exception:
+            return None
+
+    def _visible_rect(self) -> tuple[int, int, int, int]:
+        """Usable screen area ``(x, y, w, h)`` in pyglet top-left coords:
+        the screen frame minus the menu bar and dock, so Clippy never hides
+        behind them."""
+        ns = self.visible_screen()
+        if ns is None:
+            return 0, 0, 1920, 1080
+        frame = ns.frame()
+        vis = ns.visibleFrame()
+        x = int(vis.origin.x - frame.origin.x)
+        w = int(vis.size.width)
+        top = int(frame.size.height - (vis.origin.y - frame.origin.y + vis.size.height))
+        h = int(vis.size.height)
+        return x, top, w, h
+
+    def _clamp(self, x: int, y: int) -> tuple[int, int]:
+        """Clamp a requested top-left ``(x, y)`` so the window stays fully on
+        the visible screen."""
+        w, h = self.size
+        sx, sy, sw, sh = self._visible_rect()
+        margin = 8
+        x = max(sx + margin, min(int(x), sx + sw - w - margin))
+        y = max(sy + margin, min(int(y), sy + sh - h - margin))
+        return x, y
+
+    def move_to(self, x: int, y: int):
+        """Move Clippy so his top-left corner is at ``(x, y)`` (clamped on-screen)."""
+        self.set_location(*self._clamp(x, y))
+
+    def move_by(self, dx: int, dy: int):
+        """Shift Clippy by ``(dx, dy)`` in the position-API coordinate space."""
+        x, y = self.get_location()
+        self.move_to(x + dx, y + dy)
+
+    #: Named spots Clippy can move to (:meth:`move_to_spot`).
+    SPOTS = (
+        "top-left", "top-right", "bottom-left", "bottom-right",
+        "center", "left", "right", "top", "bottom",
+    )
+
+    def move_to_spot(self, name: str) -> bool:
+        """Move Clippy to a named spot on his current screen. Returns False if
+        the spot is unknown."""
+        key = (name or "").strip().lower()
+        if key not in self.SPOTS:
+            return False
+        sx, sy, sw, sh = self._visible_rect()
+        w, h = self.size
+        m = 12
+        cx = sx + (sw - w) // 2
+        cy = sy + (sh - h) // 2
+        if key == "top-left":
+            x, y = sx + m, sy + m
+        elif key == "top-right":
+            x, y = sx + sw - w - m, sy + m
+        elif key == "bottom-left":
+            x, y = sx + m, sy + sh - h - m
+        elif key == "bottom-right":
+            x, y = sx + sw - w - m, sy + sh - h - m
+        elif key == "center":
+            x, y = cx, cy
+        elif key == "left":
+            x, y = sx + m, cy
+        elif key == "right":
+            x, y = sx + sw - w - m, cy
+        elif key == "top":
+            x, y = cx, sy + m
+        else:  # bottom
+            x, y = cx, sy + sh - h - m
+        self.set_location(x, y)
+        return True
+
     def express(self, mood: str, hint: str | None = None, text: str | None = None):
         """Drive the avatar's mood (future controller / socket entry point)."""
         accepted = self.avatar.express(mood, hint)
@@ -76,9 +177,7 @@ class ClippyShell(Window):
         self._exploded = True
 
     def on_key_press(self, symbol, modifiers):
-        if symbol == pyglet.window.key.P:
-            self.toggle_passthrough()
-        elif symbol == pyglet.window.key.SPACE:
+        if symbol == pyglet.window.key.SPACE:
             self.express("greeting", hint=None)
         elif symbol == pyglet.window.key.T:
             self.thinking = not self.thinking
@@ -110,10 +209,16 @@ class ClippyShell(Window):
         if self.dialog_pending:
             parts.append("dialog:waiting")
         self.label.text = (
-            f"{' · '.join(parts)} · {bubble} (P pass / T think / E explode / Q quit)"
+            f"{' · '.join(parts)} · {bubble} (T think / E explode / Q quit)"
         )
         self.label.draw()
         self.fps.draw()
+
+    def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
+        """Drag Clippy around by grabbing any part of his window. Mouse deltas
+        are up-positive (pyglet convention); screen y is top-origin, so the
+        vertical delta is negated."""
+        self.move_by(dx, -dy)
 
     def update(self, dt: float):
         self.avatar.update(dt)

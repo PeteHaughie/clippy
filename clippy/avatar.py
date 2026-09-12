@@ -10,6 +10,10 @@ projection and stays here.
   the animation list finishes;
 * one-shot moods (greeting/celebrate/…) play once then auto-return to idle,
   settling on RestPose before the idle pool rotation kicks in after a delay.
+
+Idle rotation is opt-in (``idle.rotate`` in the config, default off): with it
+disabled Clippy simply holds the ``RestPose`` settle pose between contextual
+moods, so he only animates when the chat (or a key) actually triggers a mood.
 """
 
 import json
@@ -198,6 +202,11 @@ class Avatar:
         if not self._idle_mode:
             return
         cfg = self.moods.idle
+        # Idle rotation is opt-in (idle.rotate). Off by default: Clippy holds
+        # the RestPose settle pose so he only animates when a mood is actually
+        # triggered (chat, key, controller).
+        if not cfg.get("rotate", False):
+            return
         if not self._idle_rotating:
             self._idle_elapsed += dt
             if self._idle_elapsed >= cfg["initial_delay_sec"]:

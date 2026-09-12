@@ -31,6 +31,7 @@ from .subagent import (
     MockSubAgent,
     PiSubAgent,
     parse_delegation,
+    parse_move,
     pi_ready,
 )
 
@@ -42,6 +43,11 @@ GATE_EXT = str(
 )
 
 SUB_POS = (560, 420)
+
+#: Reliable chat commands the user types in the pane (host-intercepted, like
+#: /delegate): move Clippy to a spot or absolute coords, or ask where he is.
+MOVE_CMD = "/move"
+WHERE_CMD = "/where"
 
 
 class Session:
@@ -61,6 +67,10 @@ class Session:
         shell.pane = self.pane
         self.pane.start_driver()
         self.pane.on_mode_toggle = self._queue_toggle
+        # Drag/resize geometry must be applied on the main thread (AppKit frame
+        # mutations can't run on WebKit's script-handler thread).
+        self.pane.on_move = self._queue_pane_move
+        self.pane.on_resize = self._queue_pane_resize
 
         # JS→Python events arrive on WebKit's script-handler thread, never
         # on the main loop thread — queue them and run them on the frame tick
@@ -112,6 +122,12 @@ class Session:
     def _queue_toggle(self):
         self._pending.put(("mode_toggle",))
 
+    def _queue_pane_move(self, data: dict):
+        self._pending.put(("pane_move", data))
+
+    def _queue_pane_resize(self, data: dict):
+        self._pending.put(("pane_resize", data))
+
     def update(self, dt):
         """Run queued JS→Python callbacks on the main thread (one per frame)."""
         while True:
@@ -126,6 +142,10 @@ class Session:
                 self.ui_response(job[1], job[2])
             elif kind == "mode_toggle":
                 self.toggle()
+            elif kind == "pane_move":
+                self.pane._on_pane_move(job[1])
+            elif kind == "pane_resize":
+                self.pane._on_pane_resize(job[1])
 
     def dump(self) -> str:
         return self.graph.dump()
@@ -162,6 +182,13 @@ class Session:
 
     def prompt(self, text: str):
         stripped = text.strip()
+        if stripped.lower().startswith(WHERE_CMD):
+            x, y = self.shell.position
+            self.pane.add_message("clippy", f"I'm at ({x}, {y}).")
+            return
+        if stripped.lower().startswith(MOVE_CMD):
+            self._run_move(self._command_move_spec(stripped[len(MOVE_CMD):].strip()))
+            return
         if stripped.lower().startswith(DELEGATE_CMD):
             task = stripped[len(DELEGATE_CMD):].strip()
             if not task:
@@ -172,6 +199,38 @@ class Session:
             self._start_delegation(task)
             return
         self.brain.prompt(text, streaming_behavior="followUp")
+
+    # ------------------------------------------------------------- movement
+
+    def _command_move_spec(self, arg: str) -> str | tuple[int, int] | None:
+        """Interpret a /move argument: ``<x> <y>`` coords or a named spot."""
+        if not arg:
+            return None
+        parts = arg.split()
+        if len(parts) == 2:
+            try:
+                return (int(parts[0]), int(parts[1]))
+            except ValueError:
+                return None
+        return arg.strip().lower()
+
+    def _run_move(self, spec: str | tuple[int, int] | None):
+        """Apply a move spec (spot name or (x, y)) and confirm in the pane.
+        Used by both the /move command and the brain's [CLIPPY::MOVE] block."""
+        if isinstance(spec, tuple):
+            x, y = spec
+            self.shell.move_to(x, y)
+            self.pane.add_message("clippy", f"Moved to ({x}, {y}).")
+            return
+        if isinstance(spec, str) and spec in self.shell.SPOTS:
+            self.shell.move_to_spot(spec)
+            self.pane.add_message("clippy", f"Moved to {spec}.")
+            return
+        self.pane.add_message(
+            "clippy",
+            "`/move <spot>` (top-left/top-right/bottom-left/bottom-right/"
+            "center/left/right/top/bottom) or `/move <x> <y>`.",
+        )
 
     def ui_response(self, rid, payload: dict):
         print(
@@ -192,12 +251,16 @@ class Session:
     def _on_answer(self, text: str):
         """Prime's final message: surface it in the pane, and if it carries a
         [CLIPPY::DELEGATE] directive (the sub-clippy composition skill), spawn
-        a sandboxed worker for the task and steer its report back in."""
+        a sandboxed worker for the task and steer its report back in. A
+        [CLIPPY::MOVE] directive moves Clippy on screen (the move skill)."""
         print(f"[clippy] answer {len(text)}b", flush=True)
         clean, task = parse_delegation(text)
+        clean, move = parse_move(clean)
         if task:
             self.shell.set_bubble("(handing off to a sub-clippy…)")
             self.delegate(task, tools=SANDBOX_TOOLS, on_complete=self._on_sub_done)
+        if move:
+            self._run_move(move)
         if clean:
             self.pane.add_message("clippy", clean)
         elif task:

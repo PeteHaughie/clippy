@@ -33,18 +33,44 @@
     height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    position: relative;
   }
   w1c-window.app {
-    height: 88%;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     --w1c-window-content-padding: 0px;
+  }
+  w1c-window.app::part(chrome) {
+    flex: 1;
+    min-height: 0;
+  }
+  .tb-spacer {
+    display: block;
+    height: 0;
+    overflow: hidden;
   }
   w1c-window.app::part(content) {
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
   }
-  .pane-gutter {
-    flex: 1;
-    background: transparent;
+  .pane-resize-handle {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 20px;
+    height: 20px;
+    cursor: nwse-resize;
+    z-index: 100;
+    background:
+      linear-gradient(135deg, transparent 0 48%, #404040 49% 53%, transparent 54%)
+        right 2px bottom 2px / 8px 8px no-repeat,
+      linear-gradient(135deg, transparent 0 48%, #808080 49% 53%, transparent 54%)
+        right 5px bottom 2px / 8px 8px no-repeat;
   }
   .ico {
     width: 16px;
@@ -61,6 +87,7 @@
   }
   .chat {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 6px;
   }
@@ -112,6 +139,7 @@
     padding: 6px;
     border-top: 1px solid #808080;
     box-shadow: inset 0 1px 0 #fff;
+    flex-shrink: 0;
   }
   w1c-input#chatinput { flex: 1; }
 </style>
@@ -120,7 +148,7 @@
   <div class="pane">
     <w1c-window class="app" title="Clippy Chat">
       <span slot="icon" class="ico"></span>
-      <div slot="toolbar" hidden></div>
+      <div slot="toolbar" class="tb-spacer"></div>
       <div class="pane-body">
         <div class="chat" id="chat">
           <div class="msg clippy">Hi — I'm Clippy. Ask me anything, or /skill something.</div>
@@ -136,7 +164,7 @@
         <w1c-button id="sendbtn">Send</w1c-button>
       </div>
     </w1c-window>
-    <div class="pane-gutter"></div>
+    <div id="paneResizeHandle" class="pane-resize-handle" title="Resize"></div>
   </div>
 <script>
   const prog = document.getElementById('prog');
@@ -310,6 +338,50 @@
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); send(); }
   });
+  // Pane geometry: the w1c title bar drags the pane; a bottom-right handle
+  // resizes it. JS only signals drag start/end — the host polls the cursor's
+  // AppKit screen position each frame and moves the panel to track it, so
+  // there's no webview-delta feedback (the source of the runaway/jerky motion).
+  const win = document.querySelector('w1c-window.app');
+  const handle = document.getElementById('paneResizeHandle');
+
+  function titlebarHeight() {
+    try {
+      const tb = win.shadowRoot && win.shadowRoot.querySelector('[part="titlebar"]');
+      if (tb) return tb.getBoundingClientRect().height + 2;
+    } catch (_) { /* pre-upgrade */ }
+    return 28;
+  }
+
+  win.addEventListener('pointerdown', (e) => {
+    const r = win.getBoundingClientRect();
+    if (e.clientY - r.top < titlebarHeight()) {
+      post('pane_move', { phase: 'start' });
+      win.setPointerCapture(e.pointerId);
+    }
+  });
+  win.addEventListener('pointerup', () => post('pane_move', { phase: 'end' }));
+  win.addEventListener('pointercancel', () => post('pane_move', { phase: 'end' }));
+
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    post('pane_resize', { phase: 'start' });
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener('pointerup', () => post('pane_resize', { phase: 'end' }));
+  handle.addEventListener('pointercancel', () => post('pane_resize', { phase: 'end' }));
+
+  // Keep the resize handle pinned to the w1c window's actual bottom-right
+  // corner, even if the webview layout viewport lags behind the panel size.
+  function placeHandle() {
+    const r = win.getBoundingClientRect();
+    handle.style.left = (r.right - handle.offsetWidth) + 'px';
+    handle.style.top = (r.bottom - handle.offsetHeight) + 'px';
+  }
+  placeHandle();
+  try { new ResizeObserver(placeHandle).observe(win); } catch (_) {}
+  window.addEventListener('resize', placeHandle);
 </script>
 </body>
 </html>

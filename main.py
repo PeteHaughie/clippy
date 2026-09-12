@@ -1,13 +1,16 @@
 """Spike entry point for ticket 003: floating transparent Clippy window.
 
 Controls:
-  P  toggle click-through (default ON, so the avatar never steals clicks)
   T  toggle Thinking / RestPose animation
   Space  Wave
   E  trigger the explosion
   N  summon the chat pane (--brain mode)      X  hide the pane
   Tab  toggle sandbox ↔ build (--brain mode)
   Q  quit
+
+Clippy's window is draggable (grab any part of it and move). In the chat
+pane, `/move <spot>` / `/move <x> <y>` move Clippy, `/where` reports his
+position, and the brain can move him too via a [CLIPPY::MOVE] directive.
 
 Flags:
   --mood <name> [--hint <hint>]  drive a single mood once, then quit

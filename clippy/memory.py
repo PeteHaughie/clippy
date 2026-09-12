@@ -17,8 +17,9 @@ from .config import load_config
 from .roots import MEMORY_DIR, MEMORY_INDEX, SKILLS_DIR
 
 #: Clippy-owned skills always exposed regardless of the user's allowlist: the
-#: memory-store protocol and the sub-clippy delegation protocol.
-ALWAYS_ON_SKILLS = ("memory", "sub-clippy")
+#: memory-store protocol, the sub-clippy delegation protocol, and the
+#: movement protocol.
+ALWAYS_ON_SKILLS = ("memory", "sub-clippy", "move")
 
 INDEX_STUB = (
     "# Clippy memory index\n\n"

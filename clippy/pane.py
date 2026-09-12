@@ -6,7 +6,10 @@ over the 011 bridge:
 
 * JS → Python: ``postMessage`` ``{type:"chat", text}`` → ``on_chat`` callback
   (the app routes it to ``brain.prompt``); ``{type:"ui_response", id, …}`` →
-  ``on_ui_response`` (routes to ``brain.send`` for extension dialogs).
+  ``on_ui_response`` (routes to ``brain.send`` for extension dialogs);
+  ``{type:"pane_move", …}`` / ``{type:"pane_resize", …}`` → the panel is
+  moved/resized on screen (the pane's title bar drags it, a dedicated
+  bottom-right handle resizes it, so the pane behaves like a normal OS pane).
 * Python → JS: ``__addMessage(role, text)`` for answers, ``__uiRequest(event)``
   to render Pi's ``extension_ui_request`` dialogs (confirm/select/input/editor)
   as w1c cards, and ``__focusInput`` for the active-mode keyboard path.
@@ -30,11 +33,12 @@ from AppKit import (
     NSBackingStoreBuffered,
     NSColor,
     NSFloatingWindowLevel,
+    NSEvent,
     NSPanel,
     NSWindowStyleMaskBorderless,
     NSWindowStyleMaskNonactivatingPanel,
 )
-from Foundation import NSMakeRect, NSObject, NSURL
+from Foundation import NSMakeRect, NSObject, NSPoint, NSSize, NSURL
 from WebKit import WKWebView, WKWebViewConfiguration
 
 import pyglet
@@ -92,8 +96,30 @@ class Pane:
         self.on_chat = None          # on_chat(text) — user typed in the pane
         self.on_ui_response = None   # on_ui_response(id, payload) — dialog answered
         self.on_mode_toggle = None   # on_mode_toggle() — Tab pressed in the pane
+        #: Drag/resize geometry arrives on WebKit's script-handler thread (see
+        #: session.py): the app marshals it onto the main frame tick, then calls
+        #: _on_pane_move/_on_pane_resize *on the main thread*. AppKit frame
+        #: mutations must never run on the bridge thread or the pane jumps.
+        self.on_move = None          # on_move(data) → queued, run on main thread
+        self.on_resize = None        # on_resize(data) → queued, run on main thread
         self._val = 0
         self._dir = 1
+        #: User-driven geometry: the pane's last dragged/resized frame and the
+        #: shell location it was anchored to then. hide()/summon() reuse it;
+        #: if Clippy himself moves, the pane re-anchors beside him.
+        self._user_origin: tuple[float, float] | None = None
+        self._user_size: tuple[float, float] | None = None
+        self._anchor_shell: tuple[int, int] | None = None
+        #: In-flight drag/resize bookkeeping (bridge → panel). The panel follows the
+        #: cursor's *AppKit screen position* (polled on the main thread), so no
+        #: webview CSS deltas are involved — immune to the CSS px/Retina scale
+        #: mismatch and the move/resize feedback that plagued delta-driven moves.
+        self._dragging = False
+        self._resizing = False
+        self._drag_mouse: tuple[float, float] | None = None   # cursor at drag start
+        self._drag_off: tuple[float, float] | None = None      # cursor − panel origin
+        self._resize_mouse: tuple[float, float] | None = None  # cursor at resize start
+        self._resize_start: tuple[float, float] | None = None  # panel size at start
 
     # ------------------------------------------------------------ creation
 
@@ -136,6 +162,9 @@ class Pane:
         self.navdelegate = NavDelegate.alloc().init()
         self.navdelegate.py_on_load = self._on_webview_loaded
         webview.setNavigationDelegate_(self.navdelegate)
+        # Match the webview to the panel's size (a persisted user-resized pane
+        # must not leave the HTML viewport at the 340x460 default).
+        self._sync_webview()
         print(f"[pane] created {PANE_W}x{PANE_H}pt (mode={self.mode})", flush=True)
 
     def _on_webview_loaded(self):
@@ -166,11 +195,155 @@ class Pane:
         elif kind == "mode_toggle":
             if self.on_mode_toggle:
                 self.on_mode_toggle()
+        elif kind == "pane_move":
+            if self.on_move is not None:
+                self.on_move(data)
+            else:
+                self._on_pane_move(data)
+        elif kind == "pane_resize":
+            if self.on_resize is not None:
+                self.on_resize(data)
+            else:
+                self._on_pane_resize(data)
         elif kind == "debug":
             print(
                 f"[pane] js: {data.get('text') or data.get('body') or data}",
                 flush=True,
             )
+
+    # ------------------------------------------------------ pane geometry
+    # The pane's w1c title bar drags it (pane_move) and the bottom-right
+    # handle resizes it (pane_resize); the pane JS posts cursor deltas and the
+    # host moves/resizes the real NSPanel. Deltas are CSS px (right +, down +);
+    # the panel frame is AppKit bottom-left origin, so y is negated on move.
+
+    MIN_PANE_W, MIN_PANE_H = 260, 300
+
+    # ---------------------------------------------------- cursor geometry
+    # The w1c title bar / resize handle post drag start/end; while active the
+    # panel tracks the cursor's AppKit screen position (polled each frame).
+    # This keeps everything in AppKit points — no webview CSS px, no scale
+    # factor, no feedback — so the pane follows the cursor 1:1 on screen.
+
+    def _mouse_global(self) -> tuple[float, float]:
+        p = NSEvent.mouseLocation()
+        return (p.x, p.y)
+
+    def _panel_global_origin(self):
+        """The panel's origin in global screen coords (bottom-left origin)."""
+        if self.panel is None:
+            return None
+        screen = self.panel.screen()
+        so = screen.frame().origin
+        o = self.panel.frame().origin
+        return (so.x + o.x, so.y + o.y)
+
+    def _set_frame_from_global(self, gx: float, gy: float):
+        screen = self.panel.screen()
+        so = screen.frame().origin
+        self._move_panel(gx - so.x, gy - so.y)
+
+    def _on_pane_move(self, data: dict):
+        phase = data.get("phase")
+        if phase == "start":
+            mouse = self._mouse_global()
+            origin = self._panel_global_origin()
+            if origin is None:
+                return
+            self._drag_mouse = mouse
+            self._drag_off = (mouse[0] - origin[0], mouse[1] - origin[1])
+            self._dragging = True
+        elif phase == "end":
+            self._dragging = False
+            self._drag_mouse = None
+            self._drag_off = None
+
+    def _drag_tick(self):
+        if not self._dragging or self._drag_off is None or self._drag_mouse is None:
+            return
+        mx, my = self._mouse_global()
+        # Keep the grab point under the cursor: target origin = cursor − offset.
+        self._set_frame_from_global(mx - self._drag_off[0], my - self._drag_off[1])
+
+    def _on_pane_resize(self, data: dict):
+        phase = data.get("phase")
+        if phase == "start":
+            self._resize_mouse = self._mouse_global()
+            self._resize_start = self._frame_size()
+            self._resizing = True
+        elif phase == "end":
+            self._resizing = False
+            self._resize_mouse = None
+            self._resize_start = None
+
+    def _resize_tick(self):
+        if not self._resizing or self._resize_start is None or self._resize_mouse is None:
+            return
+        mx, my = self._mouse_global()
+        w0, h0 = self._resize_start
+        w = w0 + (mx - self._resize_mouse[0])
+        # AppKit y grows upward, so dragging DOWN decreases `my` — which should
+        # grow the pane (its bottom edge follows the handle). Negate the delta.
+        h = h0 - (my - self._resize_mouse[1])
+        self._resize_panel(int(w), int(h))
+
+    def _geom_tick(self, dt):
+        if self.panel is None:
+            return
+        if self._dragging:
+            self._drag_tick()
+        if self._resizing:
+            self._resize_tick()
+
+    def _move_panel(self, x: float, y: float):
+        if self.panel is None:
+            return
+        self.panel.setFrameOrigin_(NSPoint(x, y))
+        self._remember_geometry()
+
+    def _resize_panel(self, w: int, h: int):
+        if self.panel is None:
+            return
+        w = max(self.MIN_PANE_W, int(w))
+        h = max(self.MIN_PANE_H, int(h))
+        # setContentSize_ keeps the panel's top-left fixed on this borderless
+        # NSPanel, growing down/right — the normal OS-pane resize feel. Do NOT
+        # also move the origin here: that drifted the top edge, shifted the
+        # webview's clientY and fed back into the deltas (runaway sizing).
+        self.panel.setContentSize_(NSSize(w, h))
+        self._sync_webview()
+        self._remember_geometry()
+
+    def _sync_webview(self):
+        """Force the WKWebView to match the panel's content size, so the HTML
+        layout viewport (100vh) always tracks the panel. Without this the
+        webview can hold a stale viewport after a resize, leaving a gap below
+        the chat window and the resize handle drifting away from the corner."""
+        if self.panel is None or self.webview is None:
+            return
+        size = self.panel.frame().size
+        self.webview.setFrameSize_(NSSize(size.width, size.height))
+
+    def _frame_origin(self):
+        if self.panel is None:
+            return None
+        o = self.panel.frame().origin
+        return (o.x, o.y)
+
+    def _frame_size(self):
+        if self.panel is None:
+            return (PANE_W, PANE_H)
+        s = self.panel.frame().size
+        return (s.width, s.height)
+
+    def _remember_geometry(self):
+        """Snapshot the pane's frame and which shell location it was anchored
+        to, so hide/summon keeps the user's layout until Clippy moves."""
+        if self.panel is None:
+            return
+        self._user_origin = self._frame_origin()
+        self._user_size = self._frame_size()
+        self._anchor_shell = self.shell.get_location()
 
     def _evaluate(self, js):
         if self.webview is None or not self._loaded:
@@ -217,6 +390,8 @@ class Pane:
     def start_driver(self):
         """Optional demo driver: tick the pane's progress bar."""
         pyglet.clock.schedule_interval(self._drive, 0.4)
+        # Track the cursor while the pane is being dragged/resized (main thread).
+        pyglet.clock.schedule_interval(self._geom_tick, 1 / 60)
 
     def _drive(self, dt):
         if self.webview is None or self.panel is None or not self.panel.isVisible():
@@ -233,24 +408,76 @@ class Pane:
 
     # ------------------------------------------------------------- geometry
 
-    def _sprite_top(self):
-        loc = self.shell.get_location()
-        pad = 20
-        return loc[1] + pad + self.shell.avatar.frame_h * self.shell.avatar.scale
+    def _anchor_frame(self) -> tuple:
+        """The pane's spot beside Clippy: to his right, tops aligned, so the
+        chat window never overlaps the avatar and its bottom-right corner
+        (the resize handle) is clearly its own. Keeps the current size, so a
+        user-resized pane re-anchors without shrinking back to the default."""
+        w, h = self._frame_size()
+        sx, sy = self.shell.position          # Clippy window top-left (top-origin)
+        sw, _ = self.shell.size               # Clippy window width
+        gap = 12
+        px = sx + sw + gap                    # pane top-left, top-origin
+        py = sy                               # pane top aligned with Clippy's top
+        # Keep the pane fully on the visible screen (clamp in top-origin).
+        vx, vy, vw, vh = self.shell._visible_rect()
+        px = max(vx + 8, min(px, vx + vw - w - 8))
+        py = max(vy + 8, min(py, vy + vh - h - 8))
+        ns = self.shell.visible_screen()
+        screen_h = int(ns.frame().size.height) if ns else 1440
+        return (px, screen_h - py - h, w, h)  # AppKit bottom-left origin
 
     def _frame(self):
-        loc = self.shell.get_location()
-        rim = PANE_H * 0.12  # bottom 12% transparent so the avatar shows through
-        sprite_top = self._sprite_top()
-        x = loc[0] + 24
-        y = max(20, int(sprite_top - rim * 0.5))
-        return (x, y, PANE_W, PANE_H)
+        if self._user_origin is not None and self._anchor_shell is not None:
+            if self.shell.get_location() == self._anchor_shell:
+                x, y = self._user_origin
+                w, h = self._user_size or (PANE_W, PANE_H)
+                return (x, y, w, h)
+            # Clippy moved since the pane was dragged: re-anchor beside him.
+            self._user_origin = None
+            self._user_size = None
+            self._anchor_shell = None
+        return self._anchor_frame()
+
+    # ------------------------------------------------------- position API
+    # Mirror of the shell's position API, in pyglet top-origin screen coords.
+
+    @property
+    def position(self):
+        """The pane's top-left ``(x, y)`` on screen, or None before creation."""
+        if self.panel is None:
+            return None
+        f = self.panel.frame()
+        screen = self.panel.screen()
+        sh = screen.frame().size.height if screen else 0
+        return (int(f.origin.x), int(sh - (f.origin.y + f.size.height)))
+
+    def move_to(self, x: int, y: int):
+        """Move the pane so its top-left is at ``(x, y)`` (top-origin coords)."""
+        if self.panel is None:
+            return
+        screen = self.panel.screen()
+        sh = screen.frame().size.height if screen else 0
+        w, h = self._frame_size()
+        self._move_panel(int(x), sh - int(y) - h)
 
     # ------------------------------------------------------------ lifecycle
 
     def summon(self):
         if self.panel is None:
             self.create()
+        else:
+            # Re-anchor beside Clippy if he moved since the pane was last
+            # placed (drag or /move); otherwise keep the user's layout.
+            if self._user_origin is not None:
+                if self.shell.get_location() != self._anchor_shell:
+                    self._user_origin = None
+                    self._user_size = None
+                    self._anchor_shell = None
+                    x, y, w, h = self._anchor_frame()
+                    self.panel.setFrameOrigin_(NSPoint(x, y))
+                    self.panel.setContentSize_(NSSize(w, h))
+        self._sync_webview()
         self.panel.orderOut_(None)
         if self.mode == "active":
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)

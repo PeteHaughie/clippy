@@ -53,6 +53,40 @@ def parse_delegation(text: str) -> tuple[str, str | None]:
     clean = (text[: m.start()] + text[m.end():]).strip()
     return clean, (task or None)
 
+#: The movement directive (clippy/skills/move): the brain ends its reply with
+#: a [CLIPPY::MOVE] block to move Clippy on screen; the host turns it into a
+#: move (named spot or absolute x y).
+MOVE_OPEN = "[CLIPPY::MOVE]"
+_MOVE_RE = re.compile(
+    r"\[CLIPPY::MOVE\]\s*(.*?)\s*\[CLIPPY::END\]", re.DOTALL
+)
+
+
+def parse_move(text: str) -> tuple[str, str | tuple[int, int] | None]:
+    """Return ``(clean_text, move_spec)`` for an assistant reply.
+
+    If the reply carries a ``[CLIPPY::MOVE] … [CLIPPY::END]`` block, the block
+    is stripped from ``clean_text`` and ``move_spec`` is either an absolute
+    ``(x, y)`` pair or a named-spot string (validated by the caller against
+    the shell's known spots). Without a block, ``(text, None)``.
+    """
+    if not text:
+        return "", None
+    m = _MOVE_RE.search(text)
+    if not m:
+        return text, None
+    spec = m.group(1).strip()
+    clean = (text[: m.start()] + text[m.end():]).strip()
+    if not spec:
+        return clean, None
+    parts = spec.split()
+    if len(parts) == 2:
+        try:
+            return clean, (int(parts[0]), int(parts[1]))
+        except ValueError:
+            pass
+    return clean, spec  # named spot; caller validates
+
 #: Default sub-Clippy model on the local oMLX box (thinking-capable).
 DEFAULT_MODEL = "omlx/gemma-4-12B-it-qat-OptiQ-4bit"
 
