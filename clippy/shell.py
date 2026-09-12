@@ -30,7 +30,7 @@ class ClippyShell(Window):
         self._exploded = False
         self.thinking = False
         #: Prime-shell status (Phase 3): sandbox/build badge + pending-dialog
-        #: flag, fed by PrimeSession / PrimeController. None = not a prime shell.
+        #: flag, fed by Session / PrimeController. None = not a prime shell.
         self.mode: str | None = None
         self.dialog_pending = False
         self._bubble = ""

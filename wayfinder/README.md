@@ -26,5 +26,8 @@ Legend: ✅ closed · ⬜ open but blocked · 👀 open/unblocked/unclaimed (tak
 | 018 | Pi community deep-dive | research | ✅ | — | [018-pi-community-deep-dive.md](tickets/018-pi-community-deep-dive.md) |
 | 019 | Sub-clippy composition skill | prototype | ✅ | 017 | [019-sub-clippy-composition-skill.md](tickets/019-sub-clippy-composition-skill.md) |
 | 020 | Shell status-line surface (mode badge + dialog indicator) | prototype | ✅ | 016 | [020-shell-status-line-surface.md](tickets/020-shell-status-line-surface.md) |
+| 021 | Unified typed event model (graph-model P1) | prototype | ✅ | 015 | [021-typed-event-model.md](tickets/021-typed-event-model.md) |
+| 022 | Explicit state machines (graph-model P2) | prototype | ✅ | 021 | [022-explicit-state-machines.md](tickets/022-explicit-state-machines.md) |
+| 023 | Declarative session graph (graph-model P3) | prototype | ✅ | 021, 022 | [023-declarative-session-graph.md](tickets/023-declarative-session-graph.md) |
 
-**Frontier (takeable next):** the 018–020 arc delivered the projection architecture and the delegation/status-line surfaces. Remaining candidates: **RAG memory** (only if markdown memory proves thin), the live full-loop acceptance run (needs a real Aqua session — `--brain` pane typing, Tab→build approval card, `/delegate` sub-clippy).
+**Frontier (takeable next):** the control plane is now a typed graph (`clippy/model.py` + `session.py`). Remaining candidates: **live full-loop acceptance run** (needs a real Aqua session — `--brain` pane typing, Tab→build approval card, `/delegate` sub-clippy), graph refactor leftovers (**P4** single roots-of-truth for paths/config, **P5** typed `Task` node), and **RAG memory** if markdown memory proves thin.

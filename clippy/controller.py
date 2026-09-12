@@ -1,15 +1,25 @@
-"""Sub-Clippy lifecycle: consume a sub-agent's event queue on the main
-thread and drive the shell through thinking → working → complete/fail →
-celebrate → explosion → dismiss.
+"""Sub-Clippy lifecycle (phase 2, graph-model refactor).
 
-Sits alongside ``ClippyShell.update`` in the clock loop. Only touches
-pyglet-rendering APIs from the main thread (the event queue is produced by a
-background thread in :mod:`clippy.subagent`).
+Consumes a sub-agent's event queue on the main thread and drives the shell
+through the **worker lifecycle state machine** (declared as graph data in
+:data:`clippy.model.WORKER_LIFECYCLE`):
+
+    running → celebrating → exploding → dismissing → dismissed
+        └──failed──────────────────────────────┘
+
+Event parsing + thinking/text accumulation live in the shared
+:class:`clippy.events.AgentEventRouter`; this controller is an
+:class:`clippy.events.EventSink` that reacts. Only touches pyglet-rendering
+APIs from the main thread (the queue is produced by a background thread in
+:mod:`clippy.subagent`).
 """
 
 import pyglet
 
+from .events import AgentEventRouter, EventSink
 from .moods import Moods
+from .model import WORKER_LIFECYCLE
+from .statemachine import StateMachine
 
 #: Danger words/tool names → working-mood hint.
 TOOL_HINTS = {
@@ -28,119 +38,123 @@ FAIL_HOLD = 4.0      # seconds a failure window stays before closing
 TERMINAL_STOP_REASONS = {"error", "aborted"}
 
 
-def _extract_text(message: dict) -> str:
-    content = message.get("content") or []
-    parts = [
-        b.get("text", "")
-        for b in content
-        if isinstance(b, dict) and b.get("type") == "text"
-    ]
-    return "".join(parts).strip()
+def _celebrate_seconds(shell) -> float:
+    anim = shell.avatar.animations.get("Congratulate")
+    if not anim:
+        return 3.0
+    return max(sum(fr["duration"] for fr in anim["frames"]) / 1000.0, 0.1)
 
 
-class SubClippyController:
+class SubClippyController(EventSink):
     def __init__(self, shell, subagent, moods: Moods | None = None, on_complete=None):
         self.shell = shell
         self.subagent = subagent
         self.moods = moods or shell.avatar.moods
         self.on_complete = on_complete  # on_complete(failed: bool, report: str)
-        self.state = "running"  # running|celebrating|exploding|dismissing|failed
         self.failure = None
         self.answer = ""
-        self._text = ""
-        self._thinking = ""
         self._last_stop_reason = None
-        self._timers = {"celebrate": 0.0, "explode": 0.0, "dismiss": 0.0}
+        self.router = AgentEventRouter(self)
+        self.sm = StateMachine(
+            WORKER_LIFECYCLE,
+            effects=self._effects(),
+            guards=self._guards(),
+            timeouts=self._timeouts(),
+        )
 
     @property
     def done(self) -> bool:
-        return self.state in ("exploding", "dismissing", "failed") and self._expired()
+        return self.sm.done
 
-    # ------------------------------------------------------------- events
+    # ------------------------------------------------------------- machine
+
+    def _effects(self):
+        return {
+            "celebrate": self._celebrate,
+            "explode": lambda _arg: self.shell.trigger_explosion(),
+            "fail": self._fail,
+            "close": lambda _arg: self.shell.close(),
+        }
+
+    def _guards(self):
+        return {
+            "success": lambda _sm, failed: not failed,
+            "fail": lambda _sm, failed: bool(failed),
+        }
+
+    def _timeouts(self):
+        return {
+            "celebrate_duration": lambda: _celebrate_seconds(self.shell),
+            "dismiss_delay": lambda: DISMISS_DELAY,
+            "fail_hold": lambda: FAIL_HOLD,
+        }
+
+    def _celebrate(self, _arg):
+        self.shell.express("idle")
+        self.shell.express("celebrate")
+        self.shell.set_bubble("Task complete!")
+
+    def _fail(self, _arg):
+        self.shell.express("alert")  # interrupt-ok, wins over continuous moods
+        self.shell.set_bubble(f"⚠ {self.failure}")
+
+    # ------------------------------------------------------------- control
 
     def update(self, dt: float):
-        if self.state in ("dismissing", "failed"):
-            self._tick(dt)
+        self.sm.tick(dt)
         self._drain()
-        self._tick(dt)
+        self.sm.tick(dt)
+        if self.sm.is_in("exploding") and not self.shell.explosion.active:
+            self.sm.fire("explosion_done")
 
     def _drain(self):
         q = self.subagent.queue
         while True:
             try:
-                event = q.get_nowait()
+                raw = q.get_nowait()
             except Exception:
                 break
-            self._handle(event)
+            self.router.feed_raw(raw)
 
-    def _handle(self, event):
-        etype = event.get("type")
-        if etype == "sub_exit":
-            self._on_exit(event.get("exit_code"))
-        elif etype == "message_update" and event.get("assistantMessageEvent"):
-            self._handle_assistant(event["assistantMessageEvent"])
-        elif etype == "assistant_message_event":
-            self._handle_assistant(event)
-        elif etype == "message_end":
-            self._last_stop_reason = (event.get("message") or {}).get("stopReason")
-            self.answer = _extract_text(event.get("message") or {}) or self.answer
-        elif etype == "tool_execution_start":
-            self._on_tool_start(event)
-        elif etype == "tool_execution_end":
-            self._on_tool_end(event)
-        elif etype == "agent_end":
-            self._on_agent_end(event)
-        elif etype == "agent_settled":
-            pass
+    def force_quit(self):
+        self.subagent.stop()
+        self.shell.close()
 
-    def _handle_assistant(self, ev):
-        kind = ev.get("eventType") or ev.get("type")
-        if kind == "thinking_delta":
-            self._thinking += ev.get("delta", "")
-            self.shell.express("thinking")
-            self.shell.set_bubble(self._thinking.strip()[-140:])
-        elif kind == "text_delta":
-            self._text += ev.get("delta", "")
-            self.shell.express("thinking")
-            self.shell.set_bubble(self._text.strip()[-140:])
-        elif kind == "thinking_end":
-            self._thinking = (ev.get("content") or self._thinking).strip()[-140:]
-            self.shell.set_bubble(self._thinking or self._text)
-        elif kind == "text_end":
-            pass
-        elif kind == "message_end":
-            self._last_stop_reason = ev.get("stopReason")
-            self.answer = self._text.strip() or self.answer
+    # -------------------------------------------------------------- events
 
-    def _on_tool_start(self, event):
-        tool = event.get("toolName", "")
+    def thinking(self, text: str):
+        self.shell.express("thinking")
+        self.shell.set_bubble(text)
+
+    def text(self, text: str):
+        self.shell.express("thinking")
+        self.shell.set_bubble(text)
+
+    def tool_start(self, tool: str):
         hint = TOOL_HINTS.get(tool, "create")
         self.shell.express("working", hint=hint)
         self.shell.set_bubble(f"working… ({tool})")
 
-    def _on_tool_end(self, event):
+    def tool_end(self, ev):
         self.shell.express("thinking")
-        result = event.get("result") or {}
-        content = result.get("content") or []
-        text = " ".join(
-            b.get("text", "")
-            for b in content
-            if isinstance(b, dict) and b.get("type") == "text"
-        ).strip()
+        if ev.result_text:
+            self.shell.set_bubble(ev.result_text[-140:])
+        if ev.is_error:
+            self.failure = self.failure or ev.result_text or f"{ev.tool} failed"
+
+    def message_end(self, stop_reason: str, text: str):
+        self._last_stop_reason = stop_reason
         if text:
-            self.shell.set_bubble(text[-140:])
-        if event.get("isError"):
-            self.failure = self.failure or text or f"{event.get('toolName')} failed"
+            self.answer = text
 
-    def _on_agent_end(self, event):
-        if event.get("willRetry"):
-            self._thinking = ""
-            self.shell.express("thinking")
-            self.shell.set_bubble("retrying…")
+    def retry(self):
+        self.shell.express("thinking")
+        self.shell.set_bubble("retrying…")
 
-    # ------------------------------------------------------------- phases
+    def unparseable(self, raw: str):
+        self.shell.set_bubble("(unparseable event from sub-agent)")
 
-    def _on_exit(self, exit_code: int):
+    def exit(self, exit_code: int):
         failed = exit_code != 0 or self._last_stop_reason in TERMINAL_STOP_REASONS
         if self._last_stop_reason in TERMINAL_STOP_REASONS:
             self.failure = self.failure or f"agent stopped ({self._last_stop_reason})"
@@ -148,51 +162,4 @@ class SubClippyController:
             self.failure = self.failure or f"sub-agent exited {exit_code}"
         if self.on_complete:
             self.on_complete(failed, self.answer or self.failure or "")
-        if failed:
-            self._begin_fail()
-        else:
-            self._begin_celebrate()
-
-    def _begin_celebrate(self):
-        self.state = "celebrating"
-        self.shell.express("idle")
-        self.shell.express("celebrate")
-        self.shell.set_bubble("Task complete!")
-        celebrate = self.shell.avatar.animations.get("Congratulate")
-        secs = 3.0
-        if celebrate:
-            secs = max(sum(fr["duration"] for fr in celebrate["frames"]) / 1000.0, 0.1)
-        self._timers["celebrate"] = secs
-
-    def _begin_fail(self):
-        self.state = "failed"
-        self.failure = self.failure or "sub-agent failed"
-        self.shell.express("alert")  # interrupt-ok, wins over continuous moods
-        self.shell.set_bubble(f"⚠ {self.failure}")
-        self._timers["dismiss"] = FAIL_HOLD
-
-    def _tick(self, dt: float):
-        if self.state == "celebrating":
-            self._timers["celebrate"] -= dt
-            if self._timers["celebrate"] <= 0:
-                self.state = "exploding"
-                self.shell.trigger_explosion()
-        elif self.state == "exploding":
-            if not self.shell.explosion.active:
-                self._timers["dismiss"] = DISMISS_DELAY
-                self.state = "dismissing"
-        elif self.state in ("dismissing", "failed"):
-            self._timers["dismiss"] -= dt
-            if self._timers["dismiss"] <= 0:
-                self._dismiss()
-
-    def _expired(self) -> bool:
-        return self._timers["dismiss"] <= 0 and self.state in ("dismissing", "failed")
-
-    def _dismiss(self):
-        self.state = "dismissed"
-        self.shell.close()
-
-    def force_quit(self):
-        self.subagent.stop()
-        self.shell.close()
+        self.sm.fire("exit", failed)

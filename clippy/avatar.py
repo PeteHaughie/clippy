@@ -1,8 +1,10 @@
 """Clippy avatar: parses the pi0/clippy agent.json animation data and plays
 frame sequences sliced from map.png.
 
-Adds a semantic mood layer on top of the raw animation names. Moods are
-resolved via :class:`clippy.moods.Moods`:
+Mood *decisions* are a graph-declared state machine (:class:`MoodSM`,
+phase 2): continuous/oneshot/interrupt rules decide which mood may run.
+Playback (animation selection, wrapping, the idle-pool rotation) is the
+projection and stays here.
 
 * continuous moods (thinking/working/listening) hold and wrap to frame 0 when
   the animation list finishes;
@@ -16,15 +18,59 @@ from pathlib import Path
 import pyglet
 
 from .moods import Moods
+from .statemachine import StateMachine
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 MAP_PNG = ASSETS / "clippy" / "map.png"
 AGENT_JSON = ASSETS / "clippy" / "agent.json"
 
 
+def _mood_allow(moods: Moods, sm: StateMachine, mood: str) -> bool:
+    """MoodSM guard: may ``mood`` replace the current mood?
+
+    A one-shot mood is dropped while a continuous mood runs unless it is
+    marked interrupt-ok (e.g. alert); anything else may interrupt.
+    """
+    cur = sm.current
+    if cur == mood:
+        return False  # caller's no-op path
+    continuous = moods.is_continuous(mood)
+    interrupt = moods.can_interrupt(mood)
+    if (
+        cur in moods.moods
+        and cur != "idle"
+        and moods.is_continuous(cur)
+        and not continuous
+        and not interrupt
+    ):
+        return False
+    return True
+
+
+def build_mood_sm(moods: Moods) -> StateMachine:
+    """The avatar's mood machine: states = moods, edges = express/oneshot_done."""
+    states = {name: {} for name in moods.moods}
+    states.setdefault("idle", {})
+    return StateMachine(
+        {
+            "initial": "idle",
+            "states": states,
+            "transitions": [
+                {"src": "*", "trigger": "express", "guard": "mood_allow", "to": lambda sm, mood: mood},
+                {"src": "*", "trigger": "oneshot_done", "guard": "not_idle", "to": "idle"},
+            ],
+        },
+        guards={
+            "mood_allow": lambda sm, mood: _mood_allow(moods, sm, mood),
+            "not_idle": lambda sm: sm.current != "idle",
+        },
+    )
+
+
 class Avatar:
     def __init__(self, scale: float = 3.0, moods: Moods | None = None):
         self.moods = moods or Moods()
+        self.mood_sm = build_mood_sm(self.moods)
         self._texture = pyglet.image.load(str(MAP_PNG)).get_texture()
         data = json.loads(AGENT_JSON.read_text())
         self.frame_w, self.frame_h = data["framesize"]
@@ -40,17 +86,14 @@ class Avatar:
         self._wrap = False
         self._oneshot = False
 
-        # Idle rotation state.
+        # Idle rotation state (playback projection).
         self._idle_mode = False
         self._idle_elapsed = 0.0
         self._idle_rotating = False
         self._idle_rot_elapsed = 0.0
         self._idle_last = None
 
-        # Current mood; set by the first express() call below.
-        self._mood = None
-
-        self.express("idle")
+        self._play(self.moods.idle["settle"], wrap=False)
 
     # ------------------------------------------------------------------ region
 
@@ -66,30 +109,20 @@ class Avatar:
 
     @property
     def current_mood(self) -> str:
-        return self._mood
+        return self.mood_sm.current
 
     def express(self, mood: str, hint: str | None = None) -> bool:
         """Drive the avatar into a semantic mood. Returns False if ignored.
 
-        Interruption rules: a running continuous mood is replaced only by
-        another continuous mood; one-shot moods may interrupt anything only when
-        marked interrupt-ok (e.g. alert), otherwise they are dropped.
+        The interruption rules live in the MoodSM's ``mood_allow`` guard; the
+        resolved animation is the projection of the (allowed) request.
         """
+        if self.mood_sm.current == mood:
+            return True  # already there
+        if not self.mood_sm.fire("express", mood):
+            return False  # one-shot dropped while a continuous mood runs
         name = self.moods.resolve(mood, hint)
         continuous = self.moods.is_continuous(mood)
-        interrupt = self.moods.can_interrupt(mood)
-
-        if self._mood == mood:
-            return True  # already there
-
-        if (self._mood in self.moods.moods
-                and self._mood not in ("idle",)
-                and self.moods.is_continuous(self._mood)
-                and not continuous
-                and not interrupt):
-            return False  # one-shot dropped while a continuous mood runs
-
-        self._mood = mood
         self._idle_mode = continuous and mood == "idle"
         self._idle_rotating = False
         self._idle_elapsed = 0.0
@@ -101,7 +134,7 @@ class Avatar:
         return True
 
     def _settle_idle(self):
-        self._mood = "idle"
+        self.mood_sm.fire("oneshot_done")
         self._idle_mode = True
         self._idle_rotating = False
         self._idle_elapsed = 0.0
@@ -158,7 +191,7 @@ class Avatar:
             self.sprite.image = self._frames[self._frame_i]
 
     def _oneshot_done(self):
-        if self._mood != "idle":
+        if self.mood_sm.current != "idle":
             self._settle_idle()
 
     def _update_idle(self, dt: float):
