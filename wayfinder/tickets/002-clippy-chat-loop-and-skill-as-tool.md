@@ -8,6 +8,10 @@ blocked_by: []
 labels: [wayfinder:research]
 ---
 
+## Superseded (projection pivot)
+
+This researched Clippy's *own* OpenAI-SDK chat loop + a hand-rolled SKILL.md→tool mapping. The projection pivot (map.md) makes **Pi** the brain/doer, which already implements the Agent Skills standard and owns tools/permissions — so the openai-SDK loop, tool executor, and skill→function machinery are **not built**. The research remains valid reference: SKILL.md frontmatter→tool, streaming/`reasoning_content`, tools-array budget, and the provider-agnostic loop gotchas all transfer to understanding Pi's model.
+
 ## Question
 
 What are the mechanics of Clippy's own chat loop, talking to an OpenAI-compatible endpoint from Python?

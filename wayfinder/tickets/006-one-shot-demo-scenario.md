@@ -21,6 +21,12 @@ All four grilling questions answered to the current built behavior — the demo 
 
 **The one command:** `python main.py --delegate` (optional task argument; omitted = default). Add `--real` to force the real Pi sub-agent, otherwise auto-mock-fallback when the oMLX box is offline. The D key was removed from the shell — the demo is deliberately non-interactive.
 
+## Projection acceptance (post-015/016/017)
+
+The prime + pane scenario is now the companion acceptance: `python main.py --brain [prompt]` starts a sandboxed Pi RPC brain (`--tools read,grep,find,ls`), summons the w1c pane (N summon / X hide), streams the answer into the bubble + pane, Tab re-spawns to build mode (full tools + `clippy-gate.ts`) where a mutating write asks a w1c confirm card (Allow writes / Deny blocks), skills are allowlisted (`--no-skills --skill …` incl. the always-on memory skill), and memory INDEX is injected via `--append-system-prompt`. The `--delegate` sub-clippy explosion beat is unchanged and still passes.
+
+**The one command:** `python main.py --delegate` (optional task argument; omitted = default). Add `--real` to force the real Pi sub-agent, otherwise auto-mock-fallback when the oMLX box is offline. The D key was removed from the shell — the demo is deliberately non-interactive.
+
 **The task:** create `hello.py` that prints "Hello from sub-clippy!", run it, report the output.
 
 **Where it works:** a fresh sandboxed scratch dir `~/.clippy/scratch/<timestamp>/`.

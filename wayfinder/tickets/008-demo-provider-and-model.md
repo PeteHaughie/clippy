@@ -9,6 +9,10 @@ labels: [wayfinder:grilling]
 resolution: done
 ---
 
+## Superseded (projection pivot)
+
+Clippy no longer runs its own chat loop — Pi is the brain/doer and owns provider config (`~/.pi/agent/models.json`, omlx). The BYOK endpoint machinery (`clippy/llmconfig.py`) was never consumed by a loop and now serves as reference only. The demo provider/model decision is moot: Pi's omlx box drives everything.
+
 ## Question
 
 Which OpenAI-compatible provider and model powers Clippy's own chat loop for the demo?

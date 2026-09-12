@@ -2,11 +2,15 @@
 id: 013
 title: Ephemeral card pipeline in the pane
 type: prototype
-status: open
+status: closed
 assignee:
-blocked_by: [002]
+blocked_by: []
 labels: [wayfinder:prototype]
 ---
+
+## Superseded (016)
+
+Delivered, under the projection architecture, by ticket 016: cards are rendered from Pi's `extension_ui_request` dialogs (`confirm`/`select`/`input`/`editor`/`notify`) directly in the pane (`window.__uiRequest`), and form/dialog values round-trip back to the brain as `extension_ui_response`. The "assistant emits a fenced `spec` block → resolver validates (012) → js_api renders" chain is obsolete — the spec channel was framed for the hand-rolled 002 loop. Stale-card/disable semantics are handled per-dialog (buttons disable after an answer). The w1c card gallery styling lives on in the pane.
 
 ## Question
 

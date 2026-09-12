@@ -2,11 +2,15 @@
 id: 012
 title: w1c knowledge graph (+ resolver port)
 type: grilling
-status: open
+status: closed
 assignee:
-blocked_by: [002]
+blocked_by: []
 labels: [wayfinder:grilling]
 ---
+
+## Superseded (016)
+
+The "assistant emits declarative `spec` JSON → strict resolver validates against a styled knowledge graph" mechanism was framed for Clippy's own hand-rolled chat loop + skills (ticket 002). The projection pivot (map.md) makes Pi the brain: cards now arrive as Pi's `extension_ui_request` dialogs and are rendered directly by `__uiRequest` in the pane (ticket 016). The graph/resolver is no longer the mechanism; the w1c element palette + card styling it wanted to bound lives on in `assets/pane/w1c_pane.html`. Reopen only if a separate model-emitted spec channel is ever wanted.
 
 ## Question
 

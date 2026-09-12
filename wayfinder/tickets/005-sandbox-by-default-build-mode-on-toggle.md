@@ -2,11 +2,15 @@
 id: 005
 title: Sandbox by default, build mode on toggle
 type: grilling
-status: open
-assignee:
+status: closed
+assignee: pete
 blocked_by: [002]
 labels: [wayfinder:grilling]
 ---
+
+## Implemented (ticket 017, under the RPC reality)
+
+The grilling decision set below is now implemented by `main.py --brain` (ticket 017) with one RPC-driven change: **Pi 0.85.1 sets the tool set at spawn only** (no per-turn tool switching — verified in 015/018), so the Tab toggle **re-spawns the prime brain** rather than steering a live process. Build mode additionally carries the `clippy-gate.ts` approval extension (016): mutating tools (bash/write/edit) ask a w1c confirm card, fail-closed without UI. Sandbox = `--tools read,grep,find,ls` + scratch-dir cwd. Badge (`🛡`/`🔨`) in the pane statusbar. Hot-steering permissions into a live RPC process remains out of scope (spawn-time enforcement).
 
 ## Question
 

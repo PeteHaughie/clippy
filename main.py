@@ -5,6 +5,7 @@ Controls:
   T  toggle Thinking / RestPose animation
   Space  Wave
   E  trigger the explosion
+  N  summon the chat pane (--brain mode)      X  hide the pane
   Q  quit
 
 Flags:
@@ -12,6 +13,8 @@ Flags:
   --moodcycle                    play every mood in sequence, then quit
   --delegate [task]              summon a sub-clippy (optional task; uses the
                                  default when omitted)
+  --brain [prompt]               start the prime Pi brain (RPC) + chat pane;
+                                 optional opening prompt (greeting by default)
   --real                         force the real Pi sub-agent (oMLX) instead of
                                  auto-falling back to the mock
   --model <omlx/model>           which oMLX model the real sub-agent uses
@@ -19,12 +22,21 @@ Flags:
 
 import argparse
 import sys
+from pathlib import Path
 
+# Import the pyobjc runtime BEFORE pyglet so both ObjC bridges share one
+# runtime cleanly (proven harness in w1c_pane_spike.py). The pane module
+# imports AppKit/WebKit after this guard.
+import objc  # noqa: F401
 import pyglet
 
 from clippy.avatar import Avatar
+from clippy.brain import MockBrain, PiBrain
 from clippy.controller import SubClippyController
+from clippy.memory import ensure_memory, resolve_skill_paths
 from clippy.moods import Moods
+from clippy.pane import Pane
+from clippy.prime import PrimeController
 from clippy.shell import ClippyShell
 from clippy.subagent import (
     DEFAULT_MODEL,
@@ -38,6 +50,11 @@ ONE_SHOT_HOLD = 1.5  # seconds after a one-shot mood before moving on
 
 PRIME_POS = (60, 420)
 SUB_POS = (560, 420)
+
+#: Read/search-only tool allowlist for a sandboxed conversation (005).
+SANDBOX_TOOLS = ["read", "grep", "find", "ls"]
+#: Build-mode consent gate extension (016): asks before mutating tools.
+GATE_EXT = str(Path(__file__).resolve().parent / "clippy" / "extensions" / "clippy-gate.ts")
 
 
 def duration_of(avatar: Avatar, name: str) -> float:
@@ -76,6 +93,77 @@ class Delegator:
         self.controller = self._spawn(task)
 
 
+class PrimeSession:
+    """Owns the prime brain + controller and re-spawns the Pi process when the
+    user toggles sandbox ↔ build (Pi 0.85.1 sets the tool set at spawn only —
+    verified in research/pi-community-deep-dive.md §3)."""
+
+    def __init__(self, shell: ClippyShell, model: str, real: bool):
+        self.shell = shell
+        self.model = model
+        self.real = real
+        self.pane = shell.pane
+        self.mode = "sandbox"
+        self.brain = None
+        self.controller = None
+        self._spawn()
+
+    def _brain_kwargs(self) -> dict:
+        kwargs = {"model": self.model}
+        if self.mode == "sandbox":
+            kwargs["tools"] = SANDBOX_TOOLS
+        else:
+            kwargs["extensions"] = [GATE_EXT]
+        kwargs["append_system_prompt"] = ensure_memory()
+        kwargs["skills"] = resolve_skill_paths()
+        return kwargs
+
+    def _spawn(self):
+        if self.real or pi_ready():
+            brain = PiBrain(**self._brain_kwargs())
+            print(f"[clippy] prime brain: {self.mode} mode on Pi RPC ({self.model})")
+        else:
+            brain = MockBrain()
+            print("[clippy] Pi not ready — prime brain on mock")
+        self.brain = brain
+        self.controller = PrimeController(self.shell, brain)
+        self.controller.on_answer = lambda t: self.pane.add_message("clippy", t)
+        self.controller.on_ui_request = self.pane.ui_request
+        brain.start()
+        pyglet.clock.schedule_interval(self.controller.update, 1 / 60)
+        self.pane.set_mode(self.mode)
+
+    def prompt(self, text: str):
+        self.brain.prompt(text, streaming_behavior="followUp")
+
+    def ui_response(self, rid, payload: dict):
+        self.brain.send({"type": "extension_ui_response", "id": rid, **payload})
+
+    def toggle(self):
+        self.brain.stop()
+        self.mode = "build" if self.mode == "sandbox" else "sandbox"
+        print(f"[clippy] mode -> {self.mode} (re-spawning brain)")
+        self._spawn()
+        self.prompt(f"Mode is now {self.mode}.")
+
+
+class PrimeShell(ClippyShell):
+    """ClippyShell with N/X (pane) and Tab (sandbox↔build) for --brain mode."""
+
+    def on_key_press(self, symbol, modifiers):
+        if symbol == pyglet.window.key.N:
+            if self.pane is not None:
+                self.pane.summon()
+        elif symbol == pyglet.window.key.X:
+            if self.pane is not None:
+                self.pane.hide()
+        elif symbol == pyglet.window.key.TAB:
+            if self.session is not None:
+                self.session.toggle()
+        else:
+            super().on_key_press(symbol, modifiers)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scale", type=float, default=3.0)
@@ -84,17 +172,38 @@ def main() -> int:
     parser.add_argument("--hint", help="activity hint for --mood")
     parser.add_argument("--moodcycle", action="store_true", help="play every mood in sequence then quit")
     parser.add_argument("--delegate", nargs="?", const=DEFAULT_TASK, help="summon a sub-clippy for this task at startup (default task when omitted)")
+    parser.add_argument("--brain", nargs="?", const="", help="start the prime Pi brain (RPC) and give it this opening prompt (default greeting when omitted)")
     parser.add_argument("--real", action="store_true", help="force the real Pi sub-agent")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="omlx model for the real sub-agent")
     args = parser.parse_args()
 
-    shell = ClippyShell(scale=args.scale, live_key=not args.no_shader)
+    shell = PrimeShell(scale=args.scale, live_key=not args.no_shader)
     shell.show()
+    shell.pane = None
+    shell.session = None
     pyglet.clock.schedule_interval(shell.update, 1 / 60)
 
     delegator = Delegator(shell, real=args.real, model=args.model)
     if args.delegate:
         delegator.delegate(args.delegate)
+
+    session = None
+    if args.brain is not None:
+        pane = Pane(shell)
+        shell.pane = pane
+        pane.start_driver()
+
+        session = PrimeSession(shell, model=args.model, real=args.real)
+        shell.session = session
+        pane.on_chat = session.prompt
+        pane.on_ui_response = session.ui_response
+
+        opening = args.brain or (
+            "Give the user a one-line friendly greeting and say you're ready."
+        )
+        session.prompt(opening)
+        print(f"[clippy] prime opening: {opening!r}")
+        pyglet.clock.schedule_once(lambda dt: pane.summon(), 0.9)
 
     moods = shell.avatar.moods
 
@@ -111,6 +220,8 @@ def main() -> int:
         if hold:
             pyglet.clock.schedule_once(lambda dt: pyglet.app.exit(), hold)
     pyglet.app.run()
+    if session is not None:
+        session.brain.stop()
     return 0
 
 

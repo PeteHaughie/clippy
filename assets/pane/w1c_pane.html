@@ -102,6 +102,9 @@
     gap: 8px;
     align-items: center;
   }
+  .modebadge { font-weight: bold; }
+  .modebadge.sandbox { color: #000080; }
+  .modebadge.build { color: #800000; }
   #jsstate { color: #008000; }
   .input-bar {
     display: flex;
@@ -120,34 +123,11 @@
       <div slot="toolbar" hidden></div>
       <div class="pane-body">
         <div class="chat" id="chat">
-          <div class="msg you">Where are we heading today?</div>
-          <div class="msg clippy">Mapping the route. Here's the plan:</div>
-          <div class="msg clippy img">
-            <img src="../clippy/map.png" alt="route map">
-          </div>
-          <div class="msg clippy">
-            <div class="card">
-              <label>Quick action hub</label>
-              <div class="m-b-2">
-                <w1c-select><option selected>— pick a hub —</option><option>Studio</option><option>Practice</option><option>Lab</option></w1c-select>
-              </div>
-              <div class="progress-row">
-                <progress id="prog" max="100" value="0"></progress>
-                <output id="progv">0%</output>
-              </div>
-              <w1c-tabs style="margin-top:8px">
-                <button slot="tabs" type="button">Map</button>
-                <button slot="tabs" type="button">Audio</button>
-                <button slot="tabs" type="button">Video</button>
-                <div role="tabpanel">Map view — room grid + sensors.</div>
-                <div role="tabpanel">Audio — mic levels + faders.</div>
-                <div role="tabpanel">Video — camera feeds + timestamps.</div>
-              </w1c-tabs>
-            </div>
-          </div>
+          <div class="msg clippy">Hi — I'm Clippy. Ask me anything, or /skill something.</div>
         </div>
       </div>
       <span slot="statusbar" class="statusbar">
+        <span id="modebadge" class="modebadge">🛡 sandbox</span>
         <span id="jsstate">JS booting…</span>
         <span>w1c · bridge active</span>
       </span>
@@ -195,15 +175,111 @@
   window.__addMessage = addMessage;
   window.__focusInput = function () { input.focus({ preventScroll: true }); };
   window.__setProgress = function (v) {
+    if (!prog || !progv) return;
     prog.value = Math.round(v);
     progv.textContent = Math.round(v) + '%';
     jsstate.textContent = 'JS LIVE ' + Math.round(v) + '%';
+  };
+  window.__setMode = function (m) {
+    const b = document.getElementById('modebadge');
+    if (!b) return;
+    b.textContent = m === 'build' ? '🔨 build' : '🛡 sandbox';
+    b.className = 'modebadge ' + (m === 'build' ? 'build' : 'sandbox');
   };
   // Mock user message: exercises JS -> bridge -> Python -> JS round trip.
   window.__sendMock = function (text) {
     const t = text || 'hello from js (mock user)';
     addMessage('you', t);
     post('chat', { text: t });
+  };
+  // ------------------------------------------------------------- dialogs
+  // Render a Pi `extension_ui_request` (confirm/select/input/editor/notify)
+  // as a w1c card in the chat area and post the answer back.
+  function dialogCard(event) {
+    const card = document.createElement('div');
+    card.className = 'msg clippy card dialog';
+    card.dataset.id = event.id;
+    const head = document.createElement('div');
+    head.className = 'dialog-head';
+    head.textContent = (event.method || 'request').toUpperCase();
+    card.appendChild(head);
+    if (event.message) {
+      const body = document.createElement('div');
+      body.className = 'dialog-body';
+      body.textContent = event.message;
+      card.appendChild(body);
+    }
+    return card;
+  }
+  function dialogButtons(card, labels, isConfirm) {
+    const row = document.createElement('div');
+    row.className = 'dialog-buttons';
+    for (const label of labels) {
+      const b = document.createElement('w1c-button');
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        row.querySelectorAll('w1c-button').forEach((x) => { x.disabled = true; });
+        let payload;
+        if (label === labels[0]) {
+          payload = isConfirm ? { confirmed: true } : { value: card.__value };
+        } else {
+          payload = isConfirm ? { confirmed: false } : { cancelled: true };
+        }
+        post('ui_response', Object.assign({ id: card.dataset.id }, payload));
+      });
+      row.appendChild(b);
+    }
+    card.appendChild(row);
+    return row;
+  }
+  function addField(card, node) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dialog-field';
+    wrap.appendChild(node);
+    card.appendChild(wrap);
+    return node;
+  }
+  window.__uiRequest = function (event) {
+    if (!event || !event.id) return;
+    const m = event.method;
+    const card = dialogCard(event);
+    if (m === 'notify') {
+      chat.appendChild(card);
+      chat.scrollTop = chat.scrollHeight;
+      return;
+    }
+    if (m === 'confirm') {
+      dialogButtons(card, ['Allow', 'Deny'], true);
+    } else if (m === 'select') {
+      const sel = document.createElement('w1c-select');
+      (event.options || []).forEach((opt) => {
+        const o = document.createElement('option');
+        o.textContent = opt;
+        sel.appendChild(o);
+      });
+      sel.addEventListener('change', () => { card.__value = sel.value; });
+      addField(card, sel);
+      dialogButtons(card, ['OK', 'Cancel']);
+    } else if (m === 'input') {
+      const inp = document.createElement('w1c-input');
+      inp.placeholder = event.placeholder || '';
+      inp.value = event.default || '';
+      inp.addEventListener('change', () => { card.__value = inp.value; });
+      addField(card, inp);
+      dialogButtons(card, ['OK', 'Cancel']);
+    } else if (m === 'editor') {
+      const ta = document.createElement('textarea');
+      ta.style.cssText = 'width:100%;height:120px;';
+      ta.value = event.default || '';
+      ta.addEventListener('input', () => { card.__value = ta.value; });
+      addField(card, ta);
+      dialogButtons(card, ['OK', 'Cancel']);
+    } else {
+      dialogButtons(card, ['OK']);
+    }
+    chat.appendChild(card);
+    chat.scrollTop = chat.scrollHeight;
+    jsstate.textContent = 'ui:' + m;
   };
   // Prove the w1c bundle actually registered our components.
   if (customElements.get('w1c-window')) {
@@ -220,14 +296,6 @@
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); send(); }
   });
-  let val = 0, dir = 1;
-  setInterval(() => {
-    if (window.__paused) return;
-    val += dir * 5;
-    if (val >= 100) { val = 100; dir = -1; }
-    if (val <= 0) { val = 0; dir = 1; }
-    window.__setProgress(val);
-  }, 400);
 </script>
 </body>
 </html>
