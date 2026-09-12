@@ -88,7 +88,13 @@ class SubAgent:
 
 
 def pi_ready() -> bool:
-    """True if a real Pi binary is on PATH with the omlx provider configured."""
+    """True if a real Pi binary is on PATH with a known real provider configured.
+
+    Providers we treat as "real": ``omlx`` (oMLX, tailnet or local) and
+    ``opencode`` (OpenCode Zen/cloud OpenAI-compatible). A config that only
+    has e.g. the stock Pi cloud provider should not be treated as ready for
+    the local loop.
+    """
     if shutil.which("pi") is None:
         return False
     try:
@@ -100,7 +106,9 @@ def pi_ready() -> bool:
         ).stdout
     except (subprocess.SubprocessError, OSError):
         return False
-    return any(line.startswith("omlx") for line in out.splitlines())
+    return any(
+        line.startswith(("omlx", "opencode")) for line in out.splitlines()
+    )
 
 
 class PiSubAgent(SubAgent):
