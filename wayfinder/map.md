@@ -27,6 +27,8 @@ A working local demo on this Mac: **Clippy is a projection into userland from th
 - [PiBrain RPC prime](tickets/015-pibrain-rpc-prime.md): `clippy/brain.py` (`PiBrain` real + `MockBrain` offline) + `clippy/prime.py` (`PrimeController`: event→mood/bubble mapping, `on_answer`/`on_ui_request` hooks). Verified live (RPC round-trip → `agent_settled`) + mock. RPC "hang" earlier was my harness closing stdin (pi exits cleanly on client EOF).
 - [Projection surface / approval cards](tickets/016-projection-surface-approval-cards.md): `clippy/pane.py` (w1c WKWebView pane, chat + dialog surface), `clippy/extensions/clippy-gate.ts` (build-mode consent gate, fail-closed), `__uiRequest` dialog cards. **Verified live:** write → `extension_ui_request confirm` → Allow writes file / Deny blocks (isError, no file).
 - [Skills allowlist, sandbox, memory](tickets/017-skills-allowlist-sandbox-memory.md): editable `skills.allow` (`--no-skills --skill …`), sandbox=`--tools read,grep,find,ls`, build=full+gated, Tab re-spawns; memory = `~/.clippy/memory/INDEX.md` injected via `--append-system-prompt` (Pi confirmed it sees it) + `memory` skill.
+- [Sub-clippy composition skill](tickets/019-sub-clippy-composition-skill.md): `clippy/skills/sub-clippy` (always-on) teaches the prime to delegate research legwork; **`/delegate <task>`** chat command (host-intercepted, deterministic) + autonomous `[CLIPPY::DELEGATE]…[CLIPPY::END]` directive; `parse_delegation`; children are sandboxed read/search-only; reports relay back through the prime. (Mechanism proven live; gemma-12B won't reliably invoke the skill on its own → the command is the demo path.)
+- [Shell status-line surface](tickets/020-shell-status-line-surface.md): mode badge (🛡/🔨) + `dialog:waiting` segment in the shell status line, fed from `PrimeSession`/`PrimeController`.
 - [Floating window with animated avatar](tickets/003-floating-window-with-animated-avatar.md): pyglet 2.1 + pyobjc, `WINDOW_STYLE_OVERLAY` transparent always-on-top click-through; shell↔brain = the brain queue (sockets not needed).
 - [Contextual animation moods + agent API](tickets/009-contextual-animation-moods-and-agent-api.md): 8 semantic moods + hints; controller-driven; shipped defaults in `clippy/config.json`, user override `~/.clippy/config.json`.
 - [Sub-clippy lifecycle and explosion](tickets/004-sub-clippy-lifecycle-and-explosion.md): second `ClippyShell` per delegation; `clippy/subagent.py` (`PiSubAgent` `--mode json` + mock) + `clippy/controller.py` maps events → moods → celebrate → explode → dismiss.
@@ -38,9 +40,8 @@ A working local demo on this Mac: **Clippy is a projection into userland from th
 
 ## Not yet specified / next
 
-- Sub-clippy context **composition via a skill** (Prime prompts `/skill:…` to spawn a pared-down child): the official recipe is proven; a Clippy-owned composition skill is not yet shipped.
+- **Live full-loop acceptance run** (needs a real Aqua session): `--brain` pane typing → Pi answers with thinking in the bubble; sandboxed write blocked; Tab → build → approval card Allow/Deny; `/delegate` sub-clippy spawn → think → explode. Each piece is verified in isolation; the interactive loop is not.
 - RAG/vector memory (decision: Pi-level markdown memory now; RAG only if it proves insufficient).
-- Where the badge/status and dialog cards should also surface in the shell status line (currently pane statusbar only).
 
 ## Out of scope
 

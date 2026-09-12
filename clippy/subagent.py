@@ -12,6 +12,7 @@ Two implementations of the :class:`SubAgent` interface:
 
 import datetime
 import json
+import re
 import shutil
 import subprocess
 import threading
@@ -21,6 +22,37 @@ from pathlib import Path
 
 CLIPPY_ROOT = Path.home() / ".clippy"
 SCRATCH_ROOT = CLIPPY_ROOT / "scratch"
+
+#: Read/search-only tool allowlist for delegated sub-clippies (005/017).
+SUB_SANDBOX_TOOLS = ["read", "grep", "find", "ls"]
+
+#: The composition-skill directive (clippy/skills/sub-clippy): the prime ends
+#: its reply with a [CLIPPY::DELEGATE] block; the host turns it into a worker.
+DELEGATE_OPEN = "[CLIPPY::DELEGATE]"
+DELEGATE_CLOSE = "[CLIPPY::END]"
+#: Reliable chat command the user types in the pane: ``/delegate <task>``. The
+#: host intercepts it directly (no model compliance needed for the demo path).
+DELEGATE_CMD = "/delegate"
+_DELEGATE_RE = re.compile(
+    r"\[CLIPPY::DELEGATE\]\s*(.*?)\s*\[CLIPPY::END\]", re.DOTALL
+)
+
+
+def parse_delegation(text: str) -> tuple[str, str | None]:
+    """Return ``(clean_text, task)`` for an assistant reply.
+
+    If the reply carries a ``[CLIPPY::DELEGATE] … [CLIPPY::END]`` block, ``task``
+    is its (stripped) content and the block is removed from ``clean_text``.
+    Without a block, ``(text, None)``.
+    """
+    if not text:
+        return "", None
+    m = _DELEGATE_RE.search(text)
+    if not m:
+        return text, None
+    task = m.group(1).strip()
+    clean = (text[: m.start()] + text[m.end():]).strip()
+    return clean, (task or None)
 
 #: Default sub-Clippy model on the local oMLX box (thinking-capable).
 DEFAULT_MODEL = "omlx/gemma-4-12B-it-qat-OptiQ-4bit"
@@ -89,12 +121,14 @@ class PiSubAgent(SubAgent):
         model: str = DEFAULT_MODEL,
         thinking: bool = True,
         cwd: Path | None = None,
+        tools: list[str] | None = None,
     ):
         self.task = task
         self.system_prompt = system_prompt
         self.model = model
         self.thinking = thinking
         self.cwd = cwd or make_scratch_dir()
+        self.tools = tools
         self._q: queue.Queue = queue.Queue()
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
@@ -104,7 +138,7 @@ class PiSubAgent(SubAgent):
     def queue(self) -> queue.Queue:
         return self._q
 
-    def start(self):
+    def _cmd(self) -> list[str]:
         name = f"subclippy-{datetime.datetime.now().strftime('%H%M%S')}"
         cmd = [
             "pi",
@@ -115,7 +149,13 @@ class PiSubAgent(SubAgent):
             "--model", self.model,
             "--system-prompt", self.system_prompt,
         ]
+        if self.tools:
+            cmd += ["--tools", ",".join(self.tools)]
         cmd += [self.task]
+        return cmd
+
+    def start(self):
+        cmd = self._cmd()
 
         stderr_fh = open(self._stderr_path, "w")
         self._proc = subprocess.Popen(

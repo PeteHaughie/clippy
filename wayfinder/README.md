@@ -24,5 +24,7 @@ Legend: ✅ closed · ⬜ open but blocked · 👀 open/unblocked/unclaimed (tak
 | 016 | Projection surface — approval cards + dialog surface | prototype | ✅ | 015 | [016-projection-surface-approval-cards.md](tickets/016-projection-surface-approval-cards.md) |
 | 017 | Skills allowlist, sandbox toggle, persistent memory | prototype | ✅ | 015, 016 | [017-skills-allowlist-sandbox-memory.md](tickets/017-skills-allowlist-sandbox-memory.md) |
 | 018 | Pi community deep-dive | research | ✅ | — | [018-pi-community-deep-dive.md](tickets/018-pi-community-deep-dive.md) |
+| 019 | Sub-clippy composition skill | prototype | ✅ | 017 | [019-sub-clippy-composition-skill.md](tickets/019-sub-clippy-composition-skill.md) |
+| 020 | Shell status-line surface (mode badge + dialog indicator) | prototype | ✅ | 016 | [020-shell-status-line-surface.md](tickets/020-shell-status-line-surface.md) |
 
-**Frontier (takeable next):** the 018/015/016/017 arc delivered the projection architecture. Next candidates: a Clippy-owned sub-clippy **composition skill** (Prime prompts `/skill:…` to spawn a pared-down child), RAG memory if markdown memory proves thin, and wiring the mode badge/cards into the shell status line.
+**Frontier (takeable next):** the 018–020 arc delivered the projection architecture and the delegation/status-line surfaces. Remaining candidates: **RAG memory** (only if markdown memory proves thin), the live full-loop acceptance run (needs a real Aqua session — `--brain` pane typing, Tab→build approval card, `/delegate` sub-clippy).

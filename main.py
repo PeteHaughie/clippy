@@ -41,9 +41,11 @@ from clippy.shell import ClippyShell
 from clippy.subagent import (
     DEFAULT_MODEL,
     DEFAULT_TASK,
+    DELEGATE_CMD,
     MockSubAgent,
     PiSubAgent,
     pi_ready,
+    parse_delegation,
 )
 
 ONE_SHOT_HOLD = 1.5  # seconds after a one-shot mood before moving on
@@ -71,26 +73,36 @@ class Delegator:
         self.model = model
         self.controller = None
 
-    def _spawn(self, task: str) -> SubClippyController:
+    def _spawn(self, task: str, tools=None, on_complete=None) -> SubClippyController:
         if self.real or pi_ready():
-            agent = PiSubAgent(task=task, model=self.model)
+            agent = PiSubAgent(task=task, model=self.model, tools=tools)
             print(f"[clippy] delegating to PI sub-agent ({self.model})")
         else:
             agent = MockSubAgent(task=task)
             print("[clippy] PI not ready — delegating to mock sub-agent")
         shell = ClippyShell(position=SUB_POS)
-        ctrl = SubClippyController(shell, agent)
+        ctrl = SubClippyController(shell, agent, on_complete=on_complete)
         shell.show()
         pyglet.clock.schedule_interval(shell.update, 1 / 60)
         pyglet.clock.schedule_interval(ctrl.update, 1 / 60)
         agent.start()
         return ctrl
 
-    def delegate(self, task: str = DEFAULT_TASK):
+    def delegate(self, task: str = DEFAULT_TASK, tools=None, on_complete=None) -> bool:
+        """Spawn a sub-clippy for ``task``. Returns False if already delegating.
+        The controller slot frees itself when the worker completes, so a later
+        delegation can start a new one."""
         if self.controller is not None:
             print("[clippy] already delegating")
-            return
-        self.controller = self._spawn(task)
+            return False
+
+        def _wrap(failed: bool, report: str):
+            self.controller = None
+            if on_complete:
+                on_complete(failed, report)
+
+        self.controller = self._spawn(task, tools=tools, on_complete=_wrap)
+        return True
 
 
 class PrimeSession:
@@ -98,8 +110,9 @@ class PrimeSession:
     user toggles sandbox ↔ build (Pi 0.85.1 sets the tool set at spawn only —
     verified in research/pi-community-deep-dive.md §3)."""
 
-    def __init__(self, shell: ClippyShell, model: str, real: bool):
+    def __init__(self, shell: ClippyShell, delegator: Delegator, model: str, real: bool):
         self.shell = shell
+        self.delegator = delegator
         self.model = model
         self.real = real
         self.pane = shell.pane
@@ -127,17 +140,78 @@ class PrimeSession:
             print("[clippy] Pi not ready — prime brain on mock")
         self.brain = brain
         self.controller = PrimeController(self.shell, brain)
-        self.controller.on_answer = lambda t: self.pane.add_message("clippy", t)
+        self.controller.on_answer = self._on_answer
         self.controller.on_ui_request = self.pane.ui_request
+        self.shell.mode = self.mode
+        self.shell.dialog_pending = False
         brain.start()
         pyglet.clock.schedule_interval(self.controller.update, 1 / 60)
         self.pane.set_mode(self.mode)
 
     def prompt(self, text: str):
+        stripped = text.strip()
+        if stripped.lower().startswith(DELEGATE_CMD):
+            task = stripped[len(DELEGATE_CMD):].strip()
+            if not task:
+                self.pane.add_message(
+                    "clippy", "What should the sub-clippy do? e.g. `/delegate count the markdown files`"
+                )
+                return
+            self._start_delegation(task)
+            return
         self.brain.prompt(text, streaming_behavior="followUp")
+
+    def _start_delegation(self, task: str):
+        self.shell.set_bubble("(handing off to a sub-clippy…)")
+        ok = self.delegator.delegate(
+            task,
+            tools=SANDBOX_TOOLS,
+            on_complete=self._on_sub_done,
+        )
+        if not ok:
+            self.pane.add_message(
+                "clippy", "A sub-clippy is already at work — let it finish first."
+            )
+        else:
+            self.pane.add_message(
+                "clippy", "Handed that to a sub-clippy — report back shortly."
+            )
+            self.brain.steer(
+                f"The user delegated this task to a sub-clippy: {task}"
+            )
 
     def ui_response(self, rid, payload: dict):
         self.brain.send({"type": "extension_ui_response", "id": rid, **payload})
+        self.shell.dialog_pending = False
+
+    def _on_answer(self, text: str):
+        """Prime's final message: surface it in the pane, and if it carries a
+        [CLIPPY::DELEGATE] directive (the sub-clippy composition skill), spawn
+        a sandboxed worker for the task and steer its report back in."""
+        clean, task = parse_delegation(text)
+        if task:
+            self.shell.set_bubble("(handing off to a sub-clippy…)")
+            self.delegator.delegate(
+                task,
+                tools=SANDBOX_TOOLS,
+                on_complete=self._on_sub_done,
+            )
+        if clean:
+            self.pane.add_message("clippy", clean)
+        elif task:
+            self.pane.add_message(
+                "clippy", "I've handed that to a sub-clippy — report back shortly."
+            )
+
+    def _on_sub_done(self, failed: bool, report: str):
+        self.shell.set_bubble("(sub-clippy finished — relaying)")
+        if report:
+            self.pane.add_message("clippy", f"Sub-clippy reported: {report}")
+        self.brain.steer(
+            "The delegated sub-clippy finished"
+            f"{' with an error' if failed else ''}. "
+            f"Relay its report to the user plainly: {report or '(no report)'}"
+        )
 
     def toggle(self):
         self.brain.stop()
@@ -193,7 +267,7 @@ def main() -> int:
         shell.pane = pane
         pane.start_driver()
 
-        session = PrimeSession(shell, model=args.model, real=args.real)
+        session = PrimeSession(shell, delegator, model=args.model, real=args.real)
         shell.session = session
         pane.on_chat = session.prompt
         pane.on_ui_response = session.ui_response

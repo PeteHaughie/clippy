@@ -6,8 +6,9 @@
   A ``memory`` skill (shipped in ``clippy/skills/memory``) tells the model
   read/write discipline.
 * **Skills allowlist:** an editable ``skills.allow`` in the merged config
-  (``clippy/config.json`` overridden by ``~/.clippy/config.json``). The memory
-  skill is always on; anything else only if the user lists it.
+  (``clippy/config.json`` overridden by ``~/.clippy/config.json``). The
+  Clippy-owned skills (``memory``, ``sub-clippy``) are always on; anything
+  else only if the user lists it.
 """
 
 from pathlib import Path
@@ -19,6 +20,10 @@ MEMORY_DIR = CLIPPY_ROOT / "memory"
 MEMORY_INDEX = MEMORY_DIR / "INDEX.md"
 
 SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+
+#: Clippy-owned skills always exposed regardless of the user's allowlist: the
+#: memory-store protocol and the sub-clippy delegation protocol.
+ALWAYS_ON_SKILLS = ("memory", "sub-clippy")
 
 INDEX_STUB = (
     "# Clippy memory index\n\n"
@@ -35,12 +40,14 @@ def ensure_memory() -> Path:
 
 
 def resolve_skill_paths() -> list[str]:
-    """Absolute skill paths to expose: the always-on memory skill + the user's
-    ``skills.allow`` list (``~``-expanded). Empty allowlist still ships memory."""
+    """Absolute skill paths to expose: the always-on Clippy skills (memory,
+    sub-clippy) + the user's ``skills.allow`` list (``~``-expanded). An empty
+    allowlist still ships the Clippy-owned skills."""
     config = load_config().get("skills", {})
     allow = config.get("allow") or []
     paths = [str(Path(p).expanduser()) for p in allow]
-    memory_skill = SKILLS_DIR / "memory"
-    if memory_skill.exists() and str(memory_skill) not in paths:
-        paths.insert(0, str(memory_skill))
+    for name in ALWAYS_ON_SKILLS:
+        skill_dir = SKILLS_DIR / name
+        if skill_dir.exists() and str(skill_dir) not in paths:
+            paths.insert(0, str(skill_dir))
     return paths

@@ -29,6 +29,10 @@ class ClippyShell(Window):
         self.fps = FPSDisplay(window=self)
         self._exploded = False
         self.thinking = False
+        #: Prime-shell status (Phase 3): sandbox/build badge + pending-dialog
+        #: flag, fed by PrimeSession / PrimeController. None = not a prime shell.
+        self.mode: str | None = None
+        self.dialog_pending = False
         self._bubble = ""
         self.label = pyglet.text.Label(
             "",
@@ -99,8 +103,14 @@ class ClippyShell(Window):
         self.label.y = int(pad + self.avatar.frame_h * self.avatar.scale) + 6
         mood = self.avatar.current_mood
         bubble = self._bubble.replace("\n", " ") if self._bubble else "(idle)"
+        parts = []
+        if self.mode:
+            parts.append(f"mode:{'🛡' if self.mode == 'sandbox' else '🔨'}")
+        parts.append(f"mood:{mood}")
+        if self.dialog_pending:
+            parts.append("dialog:waiting")
         self.label.text = (
-            f"mood:{mood} · {bubble} (P pass / T think / E explode / Q quit)"
+            f"{' · '.join(parts)} · {bubble} (P pass / T think / E explode / Q quit)"
         )
         self.label.draw()
         self.fps.draw()

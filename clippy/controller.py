@@ -28,13 +28,25 @@ FAIL_HOLD = 4.0      # seconds a failure window stays before closing
 TERMINAL_STOP_REASONS = {"error", "aborted"}
 
 
+def _extract_text(message: dict) -> str:
+    content = message.get("content") or []
+    parts = [
+        b.get("text", "")
+        for b in content
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+    return "".join(parts).strip()
+
+
 class SubClippyController:
-    def __init__(self, shell, subagent, moods: Moods | None = None):
+    def __init__(self, shell, subagent, moods: Moods | None = None, on_complete=None):
         self.shell = shell
         self.subagent = subagent
         self.moods = moods or shell.avatar.moods
+        self.on_complete = on_complete  # on_complete(failed: bool, report: str)
         self.state = "running"  # running|celebrating|exploding|dismissing|failed
         self.failure = None
+        self.answer = ""
         self._text = ""
         self._thinking = ""
         self._last_stop_reason = None
@@ -71,6 +83,7 @@ class SubClippyController:
             self._handle_assistant(event)
         elif etype == "message_end":
             self._last_stop_reason = (event.get("message") or {}).get("stopReason")
+            self.answer = _extract_text(event.get("message") or {}) or self.answer
         elif etype == "tool_execution_start":
             self._on_tool_start(event)
         elif etype == "tool_execution_end":
@@ -81,7 +94,7 @@ class SubClippyController:
             pass
 
     def _handle_assistant(self, ev):
-        kind = ev.get("type") or ev.get("eventType")
+        kind = ev.get("eventType") or ev.get("type")
         if kind == "thinking_delta":
             self._thinking += ev.get("delta", "")
             self.shell.express("thinking")
@@ -95,6 +108,9 @@ class SubClippyController:
             self.shell.set_bubble(self._thinking or self._text)
         elif kind == "text_end":
             pass
+        elif kind == "message_end":
+            self._last_stop_reason = ev.get("stopReason")
+            self.answer = self._text.strip() or self.answer
 
     def _on_tool_start(self, event):
         tool = event.get("toolName", "")
@@ -130,6 +146,8 @@ class SubClippyController:
             self.failure = self.failure or f"agent stopped ({self._last_stop_reason})"
         if exit_code != 0:
             self.failure = self.failure or f"sub-agent exited {exit_code}"
+        if self.on_complete:
+            self.on_complete(failed, self.answer or self.failure or "")
         if failed:
             self._begin_fail()
         else:

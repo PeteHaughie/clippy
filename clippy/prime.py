@@ -84,6 +84,7 @@ class PrimeController:
             if not self._text:
                 self.shell.set_bubble("(ready)")
         elif etype == "extension_ui_request":
+            self.shell.dialog_pending = True
             if self.on_ui_request:
                 self.on_ui_request(event)
         elif etype in ("ui_prompt_start",):
