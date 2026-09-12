@@ -206,7 +206,21 @@ class MessageEnd(Ev):
     role: str = ""
     stop_reason: str = ""
     text: str = ""
+    #: ``True`` for the nested stream marker under ``message_update`` /
+    #: ``assistant_message_event`` (kind ``message_end``/``text_end``). Pi
+    #: ships one of those *and* the authoritative top-level ``message_end``
+    #: with the full message; the marker must not fire the sink twice.
+    nested: bool = False
     kind: ClassVar[str] = "message_end"
+
+
+@dataclass(frozen=True)
+class Markup(Ev):
+    """Silent stream marker (thinking_start/text_start/text_end, …): Pi emits
+    these around a section; they carry no content worth surfacing and must
+    not reach the sink."""
+
+    kind: ClassVar[str] = "markup"
 
 
 @dataclass(frozen=True)

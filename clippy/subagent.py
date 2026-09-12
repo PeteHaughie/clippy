@@ -206,7 +206,7 @@ _MOCK_SCRIPT = [
     {"type": "tool_execution_update", "toolCallId": "mock_call_2", "partialResult": {"content": [{"type": "text", "text": "Hello from sub-clippy!\n"}]}},
     {"type": "tool_execution_end", "toolCallId": "mock_call_2", "result": {"content": [{"type": "text", "text": "Hello from sub-clippy!\n"}]}, "isError": False},
     {"type": "assistant_message_event", "eventType": "text_delta", "delta": "The script ran and printed **Hello from sub-clippy!**"},
-    {"type": "message_update", "assistantMessageEvent": {"type": "message_end", "stopReason": "stop"}},
+    {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "The script ran and printed **Hello from sub-clippy!**"}]}},
     {"type": "agent_end", "willRetry": False},
     {"type": "agent_settled"},
 ]

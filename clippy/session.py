@@ -59,6 +59,7 @@ class Session:
         self.pane = Pane(shell)
         shell.pane = self.pane
         self.pane.start_driver()
+        self.pane.on_mode_toggle = self.toggle
 
         self._spawn_prime()
         self._wire()

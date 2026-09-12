@@ -78,6 +78,7 @@ class Pane:
         #: Callbacks set by the app.
         self.on_chat = None          # on_chat(text) — user typed in the pane
         self.on_ui_response = None   # on_ui_response(id, payload) — dialog answered
+        self.on_mode_toggle = None   # on_mode_toggle() — Tab pressed in the pane
         self._val = 0
         self._dir = 1
 
@@ -141,6 +142,9 @@ class Pane:
                     data.get("id"),
                     {k: v for k, v in data.items() if k not in ("type", "id")},
                 )
+        elif kind == "mode_toggle":
+            if self.on_mode_toggle:
+                self.on_mode_toggle()
 
     def _evaluate(self, js):
         if self.webview is None:

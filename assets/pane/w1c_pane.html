@@ -192,6 +192,15 @@
     addMessage('you', t);
     post('chat', { text: t });
   };
+  // Tab toggles sandbox <-> build. The toggle is otherwise bound to the avatar
+  // window's key handler, which doesn't have focus while typing here.
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      post('mode_toggle', {});
+      jsstate.textContent = 'mode_toggle…';
+    }
+  });
   // ------------------------------------------------------------- dialogs
   // Render a Pi `extension_ui_request` (confirm/select/input/editor/notify)
   // as a w1c card in the chat area and post the answer back.

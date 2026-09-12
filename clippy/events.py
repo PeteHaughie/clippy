@@ -17,6 +17,7 @@ implement :class:`EventSink` and react, they don't re-parse events.
 from __future__ import annotations
 
 import json
+import re
 
 from .model import (
     AgentEnd,
@@ -24,6 +25,7 @@ from .model import (
     AgentStart,
     Ev,
     Exit,
+    Markup,
     MessageEnd,
     MessageStart,
     Response,
@@ -38,6 +40,16 @@ from .model import (
     UiRequest,
     Unknown,
 )
+
+#: Strips model-emitted XML function calls (``<function name="…">…</function>``)
+#: from chat-visible text. Some small local models (e.g. MiniCPM 2B) weaponise
+#: the XML function-call format as plain text instead of Pi's ``tool_calls``
+#: protocol, so without this the raw markup would land in the pane's bubbles.
+_FUNCTION_XML_RE = re.compile(r"<function\b[^>]*>.*?</function>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_function_xml(text: str) -> str:
+    return _FUNCTION_XML_RE.sub("", text or "")
 
 
 def extract_text(message: dict) -> str:
@@ -72,8 +84,14 @@ def _update_event(ev: dict) -> Ev:
         return TextDelta(delta=ev.get("delta", ""))
     if kind == "toolcall_start":
         return ToolCallStart(tool=ev.get("toolName", ""))
-    if kind in ("message_end", "text_end"):
-        return MessageEnd(stop_reason=ev.get("stopReason", ""))
+    if kind == "message_end":
+        # Nested stream marker: the authoritative end-of-message is the
+        # top-level ``message_end`` (carries role + full content). Mark this
+        # as a nested marker so the router ignores it (no double sink fire).
+        return MessageEnd(stop_reason=ev.get("stopReason", ""), nested=True)
+    if kind in ("thinking_start", "text_start", "text_end"):
+        # Section markers around a stream; silent, no sink reaction.
+        return Markup()
     return Unknown(raw=json.dumps(ev))
 
 
@@ -212,6 +230,7 @@ class AgentEventRouter:
             "extension_ui_request": self._on_ui_request,
             "ui_prompt_start": self._on_ui_prompt_start,
             "response": self._noop,
+            "markup": self._noop,
             "exit": self._on_exit,
             "unknown": self._on_unknown,
         }
@@ -243,7 +262,7 @@ class AgentEventRouter:
             self.sink.thinking(self.thinking[-self.BUBBLE_LEN:])
 
     def _on_text_delta(self, ev: TextDelta):
-        self.text += ev.delta
+        self.text += strip_function_xml(ev.delta)
         self.sink.text(self.text.strip()[-self.BUBBLE_LEN:] or "(answering)")
 
     def _on_tool_start(self, ev):
@@ -253,9 +272,14 @@ class AgentEventRouter:
         self.sink.tool_end(ev)
 
     def _on_message_end(self, ev: MessageEnd):
+        if ev.nested:
+            # Stream marker (nested message_end/text_end), not the final
+            # message — the top-level message_end follows with the content.
+            return
         if ev.role and ev.role != "assistant":
             return
-        self.sink.message_end(ev.stop_reason, ev.text or self.text.strip())
+        text = strip_function_xml(ev.text) or strip_function_xml(self.text.strip())
+        self.sink.message_end(ev.stop_reason, text)
 
     def _on_agent_end(self, ev: AgentEnd):
         if ev.will_retry:
