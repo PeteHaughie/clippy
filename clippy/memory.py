@@ -13,13 +13,8 @@
 
 from pathlib import Path
 
-from .moods import load_config
-
-CLIPPY_ROOT = Path.home() / ".clippy"
-MEMORY_DIR = CLIPPY_ROOT / "memory"
-MEMORY_INDEX = MEMORY_DIR / "INDEX.md"
-
-SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+from .config import load_config
+from .roots import MEMORY_DIR, MEMORY_INDEX, SKILLS_DIR
 
 #: Clippy-owned skills always exposed regardless of the user's allowlist: the
 #: memory-store protocol and the sub-clippy delegation protocol.

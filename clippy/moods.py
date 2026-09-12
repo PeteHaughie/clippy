@@ -1,19 +1,14 @@
 """Mood catalog for the Clippy avatar.
 
-Loads the shipped defaults from ``clippy/config.json`` and deep-merges the
-optional user override at ``~/.clippy/config.json`` on top. Resolves a
-``(mood, hint)`` request into a concrete exported animation.
+Consumes the merged config from :mod:`clippy.config` — shipped defaults
+(``clippy/config.json``) deep-merged under the optional user override
+(``~/.clippy/config.json``). Resolves a ``(mood, hint)`` request into a
+concrete exported animation.
 """
 
-import copy
-import json
 import random
-from pathlib import Path
 
-CLIPPY_CONFIG_DIR = Path.home() / ".clippy"
-USER_CONFIG = CLIPPY_CONFIG_DIR / "config.json"
-
-_DEFAULTS_PATH = Path(__file__).resolve().parent / "config.json"
+from .config import load_config
 
 #: Moods that hold until the controller switches away.
 CONTINUOUS_MOODS = frozenset({"idle", "thinking", "working", "listening"})
@@ -31,23 +26,6 @@ EXPRESS_SCHEMA = {
         "text": "speech-bubble text to accompany the mood",
     },
 }
-
-
-def deep_merge(base: dict, override: dict) -> dict:
-    merged = copy.deepcopy(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def load_config() -> dict:
-    data = json.loads(_DEFAULTS_PATH.read_text())
-    if USER_CONFIG.exists():
-        data = deep_merge(data, json.loads(USER_CONFIG.read_text()))
-    return data
 
 
 class Moods:
@@ -83,11 +61,3 @@ class Moods:
 
     def available_moods(self) -> list[str]:
         return list(self.moods)
-
-
-def write_user_config() -> Path:
-    """Materialise the shipped defaults at the user override location."""
-    CLIPPY_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    if not USER_CONFIG.exists():
-        USER_CONFIG.write_text(_DEFAULTS_PATH.read_text())
-    return USER_CONFIG

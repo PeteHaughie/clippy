@@ -20,8 +20,7 @@ import queue
 import time
 from pathlib import Path
 
-CLIPPY_ROOT = Path.home() / ".clippy"
-SCRATCH_ROOT = CLIPPY_ROOT / "scratch"
+from .roots import make_scratch_dir
 
 #: Read/search-only tool allowlist for delegated sub-clippies (005/017).
 SUB_SANDBOX_TOOLS = ["read", "grep", "find", "ls"]
@@ -102,13 +101,6 @@ def pi_ready() -> bool:
     except (subprocess.SubprocessError, OSError):
         return False
     return any(line.startswith("omlx") for line in out.splitlines())
-
-
-def make_scratch_dir() -> Path:
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    d = SCRATCH_ROOT / stamp
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 class PiSubAgent(SubAgent):

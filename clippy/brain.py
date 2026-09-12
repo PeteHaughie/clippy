@@ -29,7 +29,8 @@ import queue
 import time
 from pathlib import Path
 
-from .subagent import CLIPPY_ROOT, SCRATCH_ROOT, pi_ready
+from .roots import make_scratch_dir
+from .subagent import pi_ready
 
 #: Default prime model on the local oMLX box (same family as sub-clippies).
 DEFAULT_MODEL = "omlx/gemma-4-12B-it-qat-OptiQ-4bit"
@@ -75,13 +76,6 @@ class Brain:
 
     def stop(self):
         raise NotImplementedError
-
-
-def make_scratch_dir() -> Path:
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    d = SCRATCH_ROOT / stamp
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 class PiBrain(Brain):

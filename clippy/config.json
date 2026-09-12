@@ -60,11 +60,6 @@
       "animations": ["Alert"]
     }
   },
-  "llm": {
-    "provider": "openai-compatible",
-    "base_url": "",
-    "model": ""
-  },
   "skills": {
     "allow": [],
     "comment": "Editable allowlist of skill paths (agent-skill SKILL.md dirs). Empty = no explicit skills exposed. Pi auto-discovery is disabled when a non-empty allowlist is set."

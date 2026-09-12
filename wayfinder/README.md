@@ -29,5 +29,6 @@ Legend: ✅ closed · ⬜ open but blocked · 👀 open/unblocked/unclaimed (tak
 | 021 | Unified typed event model (graph-model P1) | prototype | ✅ | 015 | [021-typed-event-model.md](tickets/021-typed-event-model.md) |
 | 022 | Explicit state machines (graph-model P2) | prototype | ✅ | 021 | [022-explicit-state-machines.md](tickets/022-explicit-state-machines.md) |
 | 023 | Declarative session graph (graph-model P3) | prototype | ✅ | 021, 022 | [023-declarative-session-graph.md](tickets/023-declarative-session-graph.md) |
+| 024 | Roots of truth for paths/config/scratch (P4) | refactor | ✅ | 021, 022, 023 | [024-roots-of-truth.md](tickets/024-roots-of-truth.md) |
 
-**Frontier (takeable next):** the control plane is now a typed graph (`clippy/model.py` + `session.py`). Remaining candidates: **live full-loop acceptance run** (needs a real Aqua session — `--brain` pane typing, Tab→build approval card, `/delegate` sub-clippy), graph refactor leftovers (**P4** single roots-of-truth for paths/config, **P5** typed `Task` node), and **RAG memory** if markdown memory proves thin.
+**Frontier (takeable next):** the control plane is now a typed graph (`clippy/model.py` + `session.py`). Remaining candidates: **live full-loop acceptance run** (needs a real Aqua session — `--brain` pane typing, Tab→build approval card, `/delegate` sub-clippy), graph-refactor leftover **P5** typed `Task` node, and **RAG memory** if markdown memory proves thin.
