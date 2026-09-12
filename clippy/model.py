@@ -362,6 +362,7 @@ SESSION_EDGES: list[tuple[str, str, str, dict, tuple]] = [
     ("prime_controller", "shell", "projects_to", {"channel": "mood"}, ("015",)),
     ("prime_controller", "shell", "projects_to", {"channel": "bubble"}, ("015",)),
     ("prime_controller", "pane", "projects_to", {"channel": "answer"}, ("015", "016")),
+    ("prime_controller", "pane", "projects_to", {"channel": "card"}, ("016", "021")),
     ("prime_controller", "dialog", "opens", {}, ("016", "021")),
     ("dialog", "pane", "rendered_as", {"channel": "card"}, ("016",)),
     ("chat_input", "prime", "triggers", {"channel": "prompt"}, ("015",)),

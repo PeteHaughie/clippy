@@ -156,6 +156,9 @@
       JSON.stringify(Object.assign({ type: type }, payload || {})));
     return true;
   }
+  window.addEventListener('error', function (e) {
+    post('debug', { text: 'error:' + ((e && e.message) || 'unknown') });
+  });
   function addMessage(role, text) {
     const d = document.createElement('div');
     d.className = 'msg ' + (role === 'you' ? 'you' : 'clippy');
@@ -212,10 +215,10 @@
     head.className = 'dialog-head';
     head.textContent = (event.method || 'request').toUpperCase();
     card.appendChild(head);
-    if (event.message) {
+    if (event.message || event.title) {
       const body = document.createElement('div');
       body.className = 'dialog-body';
-      body.textContent = event.message;
+      body.textContent = event.message || event.title;
       card.appendChild(body);
     }
     return card;
@@ -227,6 +230,7 @@
       const b = document.createElement('w1c-button');
       b.textContent = label;
       b.addEventListener('click', () => {
+        post('debug', { text: 'click:' + label + ':' + card.dataset.id });
         row.querySelectorAll('w1c-button').forEach((x) => { x.disabled = true; });
         let payload;
         if (label === labels[0]) {
@@ -289,6 +293,7 @@
     chat.appendChild(card);
     chat.scrollTop = chat.scrollHeight;
     jsstate.textContent = 'ui:' + m;
+    post('debug', { text: 'card:' + m + ':' + event.id });
   };
   // Prove the w1c bundle actually registered our components.
   if (customElements.get('w1c-window')) {

@@ -22,6 +22,7 @@ local oMLX box.
 """
 
 import json
+import os
 import select
 import subprocess
 import threading
@@ -111,6 +112,9 @@ class PiBrain(Brain):
         self._reader: threading.Thread | None = None
         self._lock = threading.Lock()
         self._stderr_path = self.cwd / "brain.stderr.log"
+        env = os.environ.get("CLIPPY_TRANSCRIPT")
+        self._transcript = Path(env) if env else None
+        self._xf: object | None = None
 
     @property
     def queue(self) -> queue.Queue:
@@ -144,6 +148,8 @@ class PiBrain(Brain):
     def start(self):
         self.cwd.mkdir(parents=True, exist_ok=True)
         stderr_fh = open(self._stderr_path, "w")
+        if self._transcript is not None:
+            self._xf = open(self._transcript, "a")
         self._proc = subprocess.Popen(
             self._cmd(),
             cwd=str(self.cwd),
@@ -165,18 +171,34 @@ class PiBrain(Brain):
             line = line.rstrip("\r")
             if not line.strip():
                 continue
+            with self._lock:
+                self._log("<<", line)
             try:
                 self._q.put(json.loads(line))
             except json.JSONDecodeError:
                 self._q.put({"type": "unparseable", "raw": line})
         code = self._proc.wait()
         stderr_fh.close()
+        if self._xf is not None:
+            self._xf.close()
+            self._xf = None
         self._q.put({"type": "brain_exit", "exit_code": code})
+
+    def _log(self, direction: str, line: str):
+        """Tee one side of the RPC exchange to the transcript file."""
+        if self._xf is None:
+            return
+        try:
+            self._xf.write(f"{direction} {line.rstrip()}\n")
+            self._xf.flush()
+        except OSError:
+            pass
 
     def send(self, cmd: dict):
         if self._proc is None or self._proc.stdin is None:
             raise RuntimeError("brain not started")
         with self._lock:
+            self._log(">>", json.dumps(cmd))
             self._proc.stdin.write(json.dumps(cmd) + "\n")
             self._proc.stdin.flush()
 

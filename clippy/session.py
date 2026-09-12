@@ -14,6 +14,7 @@ set at spawn only (research/pi-community-deep-dive.md §3).
 
 from __future__ import annotations
 
+import queue
 from pathlib import Path
 
 import pyglet
@@ -59,8 +60,14 @@ class Session:
         self.pane = Pane(shell)
         shell.pane = self.pane
         self.pane.start_driver()
-        self.pane.on_mode_toggle = self.toggle
+        self.pane.on_mode_toggle = self._queue_toggle
 
+        # JS→Python events arrive on WebKit's script-handler thread, never
+        # on the main loop thread — queue them and run them on the frame tick
+        # so pyglet/WKWebView are only ever re-entered from the main thread
+        # (re-spawning a brain from a background thread aborts the app).
+        self._pending: queue.Queue = queue.Queue()
+        pyglet.clock.schedule_interval(self.update, 1 / 60)
         self._spawn_prime()
         self._wire()
 
@@ -73,19 +80,52 @@ class Session:
                 "session graph missing required connections:\n- " + "\n- ".join(missing)
             )
 
-    def _wire(self):
-        """Bind callbacks from the graph edges (the wiring is a projection)."""
+    def _bind_prime(self):
+        """Project the answer/card edges onto the current prime controller.
+
+        ``toggle()`` re-spawns the prime, and each new controller starts with
+        ``on_answer``/``on_ui_request`` unset — bind them per spawn or the
+        build brain's answers and gate cards are silently dropped.
+        """
         for e in self.graph.edges_of("projects_to"):
             if e.dst == "pane" and e.attrs.get("channel") == "answer":
                 self.prime_controller.on_answer = self._on_answer
             elif e.dst == "pane" and e.attrs.get("channel") == "card":
                 self.prime_controller.on_ui_request = self.pane.ui_request
+
+    def _wire(self):
+        """Bind callbacks from the graph edges (the wiring is a projection)."""
+        self._bind_prime()
         for e in self.graph.edges_of("triggers"):
             if e.src == "chat_input" and e.dst == "prime":
-                self.pane.on_chat = self.prompt  # prompt() also dispatches /delegate
+                self.pane.on_chat = self._queue_chat
         for e in self.graph.edges_of("rendered_as"):
             if e.src == "dialog" and e.dst == "pane":
-                self.pane.on_ui_response = self.ui_response
+                self.pane.on_ui_response = self._queue_ui
+
+    def _queue_chat(self, text: str):
+        self._pending.put(("chat", text))
+
+    def _queue_ui(self, rid, payload: dict):
+        self._pending.put(("ui_response", rid, payload))
+
+    def _queue_toggle(self):
+        self._pending.put(("mode_toggle",))
+
+    def update(self, dt):
+        """Run queued JS→Python callbacks on the main thread (one per frame)."""
+        while True:
+            try:
+                job = self._pending.get_nowait()
+            except queue.Empty:
+                return
+            kind = job[0]
+            if kind == "chat":
+                self.prompt(job[1])
+            elif kind == "ui_response":
+                self.ui_response(job[1], job[2])
+            elif kind == "mode_toggle":
+                self.toggle()
 
     def dump(self) -> str:
         return self.graph.dump()
@@ -103,6 +143,8 @@ class Session:
         return kwargs
 
     def _spawn_prime(self):
+        if self.prime_controller is not None:
+            pyglet.clock.unschedule(self.prime_controller.update)
         if self.real or pi_ready():
             brain = PiBrain(**self._brain_kwargs())
             print(f"[clippy] prime brain: {self.mode} mode on Pi RPC ({self.model})")
@@ -111,6 +153,7 @@ class Session:
             print("[clippy] Pi not ready — prime brain on mock")
         self.brain = brain
         self.prime_controller = PrimeController(self.shell, brain)
+        self._bind_prime()
         self.shell.mode = self.mode
         self.shell.dialog_pending = False
         brain.start()
@@ -131,6 +174,11 @@ class Session:
         self.brain.prompt(text, streaming_behavior="followUp")
 
     def ui_response(self, rid, payload: dict):
+        print(
+            f"[clippy] ui_response {rid} "
+            f"confirmed={payload.get('confirmed')} cancelled={payload.get('cancelled')}",
+            flush=True,
+        )
         self.brain.send({"type": "extension_ui_response", "id": rid, **payload})
         self.shell.dialog_pending = False
 
@@ -145,6 +193,7 @@ class Session:
         """Prime's final message: surface it in the pane, and if it carries a
         [CLIPPY::DELEGATE] directive (the sub-clippy composition skill), spawn
         a sandboxed worker for the task and steer its report back in."""
+        print(f"[clippy] answer {len(text)}b", flush=True)
         clean, task = parse_delegation(text)
         if task:
             self.shell.set_bubble("(handing off to a sub-clippy…)")

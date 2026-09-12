@@ -19,6 +19,7 @@ Import order matters: the pyobjc runtime must come up before pyglet, so the
 app imports ``objc`` before this module.
 """
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -66,6 +67,16 @@ class BridgeHandler(NSObject):
             cb(message.name(), message.body())
 
 
+class NavDelegate(NSObject):
+    """WKNavigationDelegate: signals when the pane document has finished
+    loading, so driver/focus/card JS only runs once the page is live."""
+
+    def webView_didFinishNavigation_(self, webview, navigation):
+        cb = getattr(self, "py_on_load", None)
+        if cb:
+            cb()
+
+
 class Pane:
     """Transparent floating WKWebView panel rendering the w1c chat pane."""
 
@@ -75,6 +86,8 @@ class Pane:
         self.panel = None
         self.webview = None
         self.bridge = None
+        self.navdelegate = None
+        self._loaded = False
         #: Callbacks set by the app.
         self.on_chat = None          # on_chat(text) — user typed in the pane
         self.on_ui_response = None   # on_ui_response(id, payload) — dialog answered
@@ -94,7 +107,7 @@ class Pane:
         panel.setOpaque_(False)
         panel.setBackgroundColor_(NSColor.clearColor())
         panel.setHasShadow_(False)
-        panel.setIgnoresMouseEvents_(True)  # clippy stays click-through
+        panel.setIgnoresMouseEvents_(False)  # interactive: chat input + consent cards
         panel.setHidesOnDeactivate_(False)
         panel.setLevel_(NSFloatingWindowLevel)
         panel.setReleasedWhenClosed_(False)
@@ -120,7 +133,15 @@ class Pane:
         self.panel = panel
         self.webview = webview
         self.bridge = bridge
+        self.navdelegate = NavDelegate.alloc().init()
+        self.navdelegate.py_on_load = self._on_webview_loaded
+        webview.setNavigationDelegate_(self.navdelegate)
         print(f"[pane] created {PANE_W}x{PANE_H}pt (mode={self.mode})", flush=True)
+
+    def _on_webview_loaded(self):
+        self._loaded = True
+        self._evaluate("window.__focusInput();")
+        self.set_progress(self._val)
 
     # -------------------------------------------------------------- bridge
 
@@ -145,11 +166,25 @@ class Pane:
         elif kind == "mode_toggle":
             if self.on_mode_toggle:
                 self.on_mode_toggle()
+        elif kind == "debug":
+            print(
+                f"[pane] js: {data.get('text') or data.get('body') or data}",
+                flush=True,
+            )
 
     def _evaluate(self, js):
-        if self.webview is None:
+        if self.webview is None or not self._loaded:
             return
-        self.webview.evaluateJavaScript_completionHandler_(js, None)
+
+        def _done(result, error):
+            if error is not None:
+                print(
+                    f"[pane] js error: {error.localizedDescription()} in "
+                    f"{js[:60]!r}",
+                    flush=True,
+                )
+
+        self.webview.evaluateJavaScript_completionHandler_(js, _done)
 
     # ---------------------------------------------------------------- API
 
@@ -160,8 +195,17 @@ class Pane:
         )
 
     def ui_request(self, event: dict):
-        """Render a Pi ``extension_ui_request`` as a card/dialog in the pane."""
-        self._evaluate(f"window.__uiRequest({json.dumps(event)});")
+        """Render a Pi ``extension_ui_request`` as a card/dialog in the pane.
+
+        ``event`` is the normalized :class:`clippy.model.UiRequest` (an *Ev*
+        dataclass). The webview contract is a flat dict — the payload fields
+        (md: ``method``/``title``/``message``/``options``/…) live under
+        ``payload``, so flatten them to the top level before serializing.
+        """
+        flat = dataclasses.asdict(event)
+        flat.update(flat.pop("payload", {}) or {})
+        print(f"[pane] ui_request {flat.get('method')} id={flat.get('id')}", flush=True)
+        self._evaluate(f"window.__uiRequest({json.dumps(flat)});")
 
     def set_progress(self, value: float):
         self._evaluate(f"window.__setProgress({json.dumps(round(value))});")

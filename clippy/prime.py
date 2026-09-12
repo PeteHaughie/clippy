@@ -12,6 +12,8 @@ the prime is persistent: it listens, works, answers, and returns to idle.
 Hooks let the pane (ticket 016) render answers and approval cards.
 """
 
+import traceback
+
 import pyglet  # noqa: F401  (import parity with controller)
 
 from .controller import TOOL_HINTS
@@ -35,7 +37,11 @@ class PrimeController(EventSink):
     # ------------------------------------------------------------- control
 
     def update(self, dt: float):
-        self._drain()
+        try:
+            self._drain()
+        except Exception:
+            print("[prime] update error (kept alive):", flush=True)
+            traceback.print_exc()
 
     def _drain(self):
         q = self.brain.queue
@@ -103,6 +109,7 @@ class PrimeController(EventSink):
         self.shell.set_bubble("(waiting for you…)")
 
     def exit(self, code: int):
+        print(f"[prime] brain exited ({code})", flush=True)
         self.shell.express("alert")
         self.shell.set_bubble(f"brain exited ({code})")
 
