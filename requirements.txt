@@ -1,0 +1,4 @@
+# Clippy runtime dependencies (macOS: pyobjc provides the AppKit/Foundation/WebKit
+# frameworks the avatar pane needs). Verified on Python 3.11.13.
+pyglet~=2.1.16
+pyobjc~=10.3.2

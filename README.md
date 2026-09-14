@@ -111,8 +111,8 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
 ## Requirements
 
 - **macOS** — the pane uses AppKit/WebKit (`WKWebView`, `NSPanel`); everything is Cocoa.
-- **Python 3.11+** with a venv containing `pyglet`, `pyobjc` and `pillow`
-  (verified on 3.11.13: `pyglet 2.1.16`, `pyobjc 10.3.2`, `pillow 12.3.0`).
+- **Python 3.11+** with a venv; dependencies are in [`requirements.txt`](requirements.txt)
+  (`pyglet` + `pyobjc`, verified on 3.11.13: `pyglet 2.1.16`, `pyobjc 10.3.2`).
 - **Pi CLI** — `pi` 0.85.x (the `@earendil-works/pi-coding-agent` npm package, installed e.g.
   at `/opt/homebrew/bin/pi`) with a real provider configured:
   - **oMLX** — a local model box (tailnet or local), provider prefix `omlx`, or
@@ -129,7 +129,7 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
 ```bash
 # 1. Python environment
 python3 -m venv .venv
-.venv/bin/pip install pyglet pyobjc pillow
+.venv/bin/pip install -r requirements.txt
 
 # 2. Pi (see pi's own docs; already-configured provider required for real mode)
 npm install -g @earendil-works/pi-coding-agent   # or install per the pi docs
