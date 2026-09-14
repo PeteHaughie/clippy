@@ -79,7 +79,7 @@ def main() -> int:
     parser.add_argument("--delegate", nargs="?", const=DEFAULT_TASK, help="summon a sub-clippy for this task at startup (default task when omitted)")
     parser.add_argument("--brain", nargs="?", const="", help="start the prime Pi brain (RPC) and give it this opening prompt (default greeting when omitted)")
     parser.add_argument("--real", action="store_true", help="force the real Pi sub-agent")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="omlx model for the real sub-agent")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="model for the real Pi brain/sub-agent")
     args = parser.parse_args()
 
     shell = PrimeShell(scale=args.scale, live_key=not args.no_shader, position=PRIME_POS)

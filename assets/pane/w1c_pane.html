@@ -6,6 +6,7 @@
 <title>Clippy Chat — w1c spike</title>
 <link rel="stylesheet" href="vendor/w1c/w1c.css">
 <script src="vendor/w1c/w1c.bundle.js"></script>
+<script src="vendor/marked/marked.umd.js"></script>
 <script>
   // Instrumentation (probe harness): body[data-w1c] reports bundle load/upgrade state.
   document.body.dataset.w1c = 'bundle-empty';
@@ -103,6 +104,68 @@
   .msg.you { margin-left: auto; background: #ffffe1; }
   .msg.img { padding: 3px; background: #c0c0c0; }
   .msg.img img { width: 100%; height: auto; image-rendering: pixelated; }
+  /* Markdown formatting inside assistant bubbles (the reasoning stream). */
+  .msg .md { font: 13px/1.4 var(--w1c-font-ui, 'MS Sans Serif', Tahoma, sans-serif); }
+  .msg .md > :first-child { margin-top: 0; }
+  .msg .md > :last-child { margin-bottom: 0; }
+  .msg .md p { margin: 4px 0; }
+  .msg .md h1, .msg .md h2, .msg .md h3,
+  .msg .md h4, .msg .md h5, .msg .md h6 {
+    margin: 6px 0 3px;
+    font-weight: bold;
+  }
+  .msg .md h1 { font-size: 15px; }
+  .msg .md h2 { font-size: 14px; }
+  .msg .md h3 { font-size: 13px; }
+  .msg .md h4, .msg .md h5, .msg .md h6 { font-size: 12px; }
+  .msg .md ul, .msg .md ol { margin: 4px 0; padding-left: 20px; }
+  .msg .md li { margin: 1px 0; }
+  .msg .md a { color: #000080; text-decoration: underline; }
+  .msg .md strong { font-weight: bold; }
+  .msg .md em { font-style: italic; }
+  .msg .md code {
+    font: 12px/1.4 var(--w1c-font-mono, 'Courier New', monospace);
+    background: #e8e8e8;
+    border: 1px solid #b0b0b0;
+    padding: 0 3px;
+  }
+  .msg .md pre {
+    margin: 5px 0;
+    padding: 5px;
+    background: #ececec;
+    border: 1px solid #808080;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .msg .md pre code { background: none; border: none; padding: 0; }
+  .msg .md blockquote {
+    margin: 4px 0;
+    padding: 2px 8px;
+    border-left: 3px solid #808080;
+    color: #404040;
+  }
+  .msg .md hr { border: none; border-top: 1px solid #808080; margin: 6px 0; }
+  .msg .md table { border-collapse: collapse; margin: 5px 0; }
+  .msg .md th, .msg .md td { border: 1px solid #808080; padding: 2px 6px; }
+  .msg .md th { background: #d4d0c8; font-weight: bold; }
+  /* Live-stream bubble: the reasoning stream as it arrives, one bubble per turn. */
+  .msg.clippy.streaming::after {
+    content: '▌';
+    display: inline-block;
+    margin-left: 2px;
+    color: #000080;
+    animation: clippy-caret 1s steps(1) infinite;
+  }
+  @keyframes clippy-caret { 50% { opacity: 0; } }
+  .msg .md .thinking {
+    margin-bottom: 6px;
+    padding: 3px 6px;
+    border: 1px dashed #808080;
+    background: #f4f4f4;
+  }
+  .msg .md .thinking summary { cursor: pointer; font-weight: bold; color: #404040; }
+  .msg .md .thinking[open] summary { margin-bottom: 2px; }
   .card {
     margin: 0 6px 6px;
     padding: 6px;
@@ -187,11 +250,124 @@
   window.addEventListener('error', function (e) {
     post('debug', { text: 'error:' + ((e && e.message) || 'unknown') });
   });
+  // --------------------------------------------------- markdown rendering
+  // The reasoning stream arrives as markdown; render it to HTML inside the
+  // bubble. Raw HTML the model emits is sanitized (no scripts/event handlers).
+  const MD = {
+    gfm: true,
+    breaks: false,
+  };
+  const MD_FORBIDDEN = ['script', 'iframe', 'object', 'embed', 'style', 'link', 'meta', 'base', 'form'];
+  function sanitizeHtml(root) {
+    const walk = (node) => {
+      for (const el of Array.from(node.querySelectorAll('*'))) {
+        if (MD_FORBIDDEN.includes(el.tagName.toLowerCase())) {
+          el.remove();
+          continue;
+        }
+        for (const attr of Array.from(el.attributes)) {
+          const n = attr.name.toLowerCase();
+          const v = attr.value.toLowerCase();
+          if (n.startsWith('on') || n === 'href' && v.startsWith('javascript:') ||
+              n === 'src' && v.startsWith('javascript:')) {
+            el.removeAttribute(attr.name);
+          }
+        }
+      }
+    };
+    walk(root);
+    return root;
+  }
+  function renderMarkdown(text) {
+    if (!text || !text.trim()) return '';
+    let html;
+    try {
+      html = marked.parse(String(text), MD);
+    } catch (_) {
+      return '';
+    }
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    const box = document.createElement('div');
+    box.className = 'md';
+    box.appendChild(sanitizeHtml(tpl.content));
+    return box;
+  }
+  function setMarkdown(container, text) {
+    container.textContent = '';
+    const box = renderMarkdown(text);
+    if (box) container.appendChild(box);
+  }
   function addMessage(role, text) {
     const d = document.createElement('div');
     d.className = 'msg ' + (role === 'you' ? 'you' : 'clippy');
-    d.textContent = text;
+    if (role === 'you') {
+      d.textContent = text;
+    } else {
+      setMarkdown(d, text);
+    }
     chat.appendChild(d);
+    chat.scrollTop = chat.scrollHeight;
+  }
+  // Live reasoning stream: one growing bubble per assistant turn. Python
+  // re-sends the full accumulated thinking/answer text each delta; marked
+  // renders the partial markdown, so formatting appears as it streams.
+  let currentStream = null;
+  function finalizeStream(finalText) {
+    // If the turn never streamed (e.g. an answer arrives with no deltas),
+    // open the bubble now so the final text still surfaces in the pane.
+    let s = currentStream;
+    if (!s && typeof finalText === 'string' && finalText.trim()) {
+      s = makeStreamBubble();
+    }
+    if (!s) return;
+    if (typeof finalText === 'string') {
+      s.answer.textContent = '';
+      const box = renderMarkdown(finalText);
+      if (box) s.answer.appendChild(box);
+    }
+    // Hide the thinking box entirely when the turn produced no reasoning.
+    if (!s.thinking.textContent.trim()) {
+      s.details.style.display = 'none';
+    }
+    s.el.classList.remove('streaming');
+    s.el.removeAttribute('data-streaming');
+    currentStream = null;
+    chat.scrollTop = chat.scrollHeight;
+  }
+  function makeStreamBubble() {
+    if (currentStream) finalizeStream();
+    const el = document.createElement('div');
+    el.className = 'msg clippy streaming';
+    el.dataset.streaming = '1';
+    const thinking = document.createElement('details');
+    thinking.className = 'thinking';
+    thinking.open = false;
+    const sum = document.createElement('summary');
+    sum.textContent = 'Thinking…';
+    const thinkBody = document.createElement('div');
+    thinking.appendChild(sum);
+    thinking.appendChild(thinkBody);
+    const answer = document.createElement('div');
+    el.appendChild(thinking);
+    el.appendChild(answer);
+    chat.appendChild(el);
+    chat.scrollTop = chat.scrollHeight;
+    currentStream = { el, thinking: thinkBody, answer, details: thinking, summary: sum };
+    return currentStream;
+  }
+  function streamThinking(text) {
+    const s = currentStream || makeStreamBubble();
+    if (text && text.trim()) {
+      s.details.open = true;
+      s.summary.textContent = 'Thinking';
+      setMarkdown(s.thinking, text);
+    }
+    chat.scrollTop = chat.scrollHeight;
+  }
+  function streamText(text) {
+    const s = currentStream || makeStreamBubble();
+    if (text) setMarkdown(s.answer, text);
     chat.scrollTop = chat.scrollHeight;
   }
   function send() {
@@ -204,6 +380,10 @@
 
   jsstate.textContent = 'JS BOOTED';   // synchronous, timer-independent proof
   window.__addMessage = addMessage;
+  window.__streamStart = function () { makeStreamBubble(); };
+  window.__streamThinking = function (text) { streamThinking(text); };
+  window.__streamText = function (text) { streamText(text); };
+  window.__streamEnd = function (finalText) { finalizeStream(finalText); };
   window.__focusInput = function () { input.focus({ preventScroll: true }); };
   window.__setProgress = function (v) {
     if (!prog || !progv) return;

@@ -33,8 +33,10 @@ from pathlib import Path
 from .roots import make_scratch_dir
 from .subagent import pi_ready
 
-#: Default prime model on the local oMLX box (same family as sub-clippies).
-DEFAULT_MODEL = "omlx/gemma-4-12B-it-qat-OptiQ-4bit"
+#: Default prime model: OpenCode Zen (cloud) reasoning — the local oMLX box
+#: hasn't tested well enough to run the prime, so default to cloud until a
+#: better local model is found.
+DEFAULT_MODEL = "opencode/deepseek-v4-flash"
 
 #: Desktop-assistant persona; Clippy is for organisation, research and light
 #: system maintenance — not a programming agent.
@@ -305,7 +307,7 @@ class MockBrain(Brain):
         self._q.put({"type": "agent_start"})
         self._q.put({"type": "turn_start"})
         self._q.put(
-            {"type": "message_start", "message": {"role": "user", "content": []}}
+            {"type": "message_start", "message": {"role": "assistant", "content": []}}
         )
         for chunk in _MOCK_THINKING:
             self._q.put(

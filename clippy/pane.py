@@ -362,10 +362,34 @@ class Pane:
     # ---------------------------------------------------------------- API
 
     def add_message(self, role: str, text: str):
-        """Append a message bubble to the pane (role: 'you' | 'clippy')."""
+        """Append a message bubble to the pane (role: 'you' | 'clippy').
+        Clippy bubbles render the text as markdown in the pane."""
         self._evaluate(
             f"window.__addMessage({json.dumps(role)}, {json.dumps(text)});"
         )
+
+    # ------------------------------------------------ reasoning stream
+    # One growing bubble per assistant turn. The router re-sends the *full*
+    # accumulated thinking/answer text on every delta; the pane re-renders the
+    # partial markdown so formatting appears as it streams. stream_end() closes
+    # the bubble (final answer text replaces whatever streamed in, so host
+    # directives like [CLIPPY::DELEGATE] never linger on screen).
+
+    def stream_start(self):
+        """Begin a live reasoning-stream bubble (a new assistant turn)."""
+        self._evaluate("window.__streamStart();")
+
+    def stream_thinking(self, text: str):
+        """Push the full accumulated thinking (reasoning) text."""
+        self._evaluate(f"window.__streamThinking({json.dumps(text)});")
+
+    def stream_text(self, text: str):
+        """Push the full accumulated answer text."""
+        self._evaluate(f"window.__streamText({json.dumps(text)});")
+
+    def stream_end(self, final_text: str):
+        """Finalize the bubble, showing ``final_text`` as the answer."""
+        self._evaluate(f"window.__streamEnd({json.dumps(final_text)});")
 
     def ui_request(self, event: dict):
         """Render a Pi ``extension_ui_request`` as a card/dialog in the pane.

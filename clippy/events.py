@@ -169,6 +169,18 @@ class EventSink:
     def text(self, text: str):
         pass
 
+    def stream_start(self):
+        """An assistant turn began: open a live reasoning-stream bubble."""
+        pass
+
+    def stream_thinking(self, text: str):
+        """Full accumulated thinking (reasoning) buffer for the pane stream."""
+        pass
+
+    def stream_text(self, text: str):
+        """Full accumulated answer buffer for the pane stream."""
+        pass
+
     def tool_start(self, tool: str):
         pass
 
@@ -251,19 +263,24 @@ class AgentEventRouter:
             self.thinking = ""
             self.text = ""
             self.sink.turn_started()
+            self.sink.stream_start()
 
     def _on_thinking_delta(self, ev: ThinkingDelta):
         self.thinking += ev.delta
         self.sink.thinking(self.thinking.strip()[-self.BUBBLE_LEN:] or "(thinking)")
+        self.sink.stream_thinking(self.thinking)
 
     def _on_thinking_end(self, ev: ThinkingEnd):
         self.thinking = (ev.content or self.thinking).strip()
         if self.thinking:
             self.sink.thinking(self.thinking[-self.BUBBLE_LEN:])
+        self.sink.stream_thinking(self.thinking)
 
     def _on_text_delta(self, ev: TextDelta):
-        self.text += strip_function_xml(ev.delta)
+        delta = strip_function_xml(ev.delta)
+        self.text += delta
         self.sink.text(self.text.strip()[-self.BUBBLE_LEN:] or "(answering)")
+        self.sink.stream_text(self.text)
 
     def _on_tool_start(self, ev):
         self.sink.tool_start(ev.tool)

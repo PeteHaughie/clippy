@@ -30,6 +30,9 @@ class PrimeController(EventSink):
         self.moods = moods or shell.avatar.moods
         self.router = AgentEventRouter(self)
         self.sm = StateMachine(PRIME_CONVERSATION)
+        #: Optional pane wiring (set by the app). When present, the thinking/
+        #: answer deltas stream into a live markdown bubble in the pane.
+        self.pane = None
         #: Optional callbacks wired by the app (pane integration).
         self.on_answer = None      # on_assistant_text(final_text) -> callable
         self.on_ui_request = None  # on_extension_ui_request(event) -> callable
@@ -62,6 +65,18 @@ class PrimeController(EventSink):
     def turn_started(self):
         self.sm.fire("turn_started")
         self.shell.express("thinking")
+
+    def stream_start(self):
+        if self.pane is not None:
+            self.pane.stream_start()
+
+    def stream_thinking(self, text: str):
+        if self.pane is not None:
+            self.pane.stream_thinking(text)
+
+    def stream_text(self, text: str):
+        if self.pane is not None:
+            self.pane.stream_text(text)
 
     def thinking(self, text: str):
         self.shell.express("thinking")
@@ -98,6 +113,10 @@ class PrimeController(EventSink):
         self.shell.express("idle")
         if not self.router.text:
             self.shell.set_bubble("(ready)")
+        # Close a stream bubble that message_end never finalized (e.g. a turn
+        # that produced only thinking). Safe no-op if already closed.
+        if self.pane is not None:
+            self.pane.stream_end(self.router.text)
 
     def ui_request(self, ev):
         self.shell.dialog_pending = True

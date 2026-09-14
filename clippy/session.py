@@ -25,6 +25,7 @@ from .memory import ensure_memory, resolve_skill_paths
 from .model import build_session_graph, required_topology
 from .pane import Pane
 from .prime import PrimeController
+from .shell import ClippyShell
 from .subagent import (
     DEFAULT_TASK,
     DELEGATE_CMD,
@@ -95,8 +96,11 @@ class Session:
 
         ``toggle()`` re-spawns the prime, and each new controller starts with
         ``on_answer``/``on_ui_request`` unset — bind them per spawn or the
-        build brain's answers and gate cards are silently dropped.
+        build brain's answers and gate cards are silently dropped. The pane is
+        bound per spawn too so the reasoning stream keeps flowing after a
+        re-spawn.
         """
+        self.prime_controller.pane = self.pane
         for e in self.graph.edges_of("projects_to"):
             if e.dst == "pane" and e.attrs.get("channel") == "answer":
                 self.prime_controller.on_answer = self._on_answer
@@ -261,12 +265,19 @@ class Session:
             self.delegate(task, tools=SANDBOX_TOOLS, on_complete=self._on_sub_done)
         if move:
             self._run_move(move)
+        # The reasoning-stream bubble already shows the live answer; close it
+        # with the final, directive-stripped text (replaces anything that
+        # streamed in, so [CLIPPY::DELEGATE]/[CLIPPY::MOVE] never linger).
+        # stream_end("") on a reply that was entirely directives just closes
+        # the bubble.
         if clean:
-            self.pane.add_message("clippy", clean)
+            self.pane.stream_end(clean)
         elif task:
-            self.pane.add_message(
-                "clippy", "I've handed that to a sub-clippy — report back shortly."
+            self.pane.stream_end(
+                "I've handed that to a sub-clippy — report back shortly."
             )
+        else:
+            self.pane.stream_end("")
 
     def _on_sub_done(self, failed: bool, report: str):
         self.shell.set_bubble("(sub-clippy finished — relaying)")

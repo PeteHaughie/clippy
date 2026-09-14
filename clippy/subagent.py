@@ -87,11 +87,11 @@ def parse_move(text: str) -> tuple[str, str | tuple[int, int] | None]:
             pass
     return clean, spec  # named spot; caller validates
 
-#: Default sub-Clippy model on the local oMLX box (thinking-capable).
-DEFAULT_MODEL = "omlx/gemma-4-12B-it-qat-OptiQ-4bit"
+#: Default sub-Clippy model (OpenCode Zen DeepSeek V4 Flash).
+DEFAULT_MODEL = "opencode/deepseek-v4-flash"
 
 #: Cheap bang-for-buck alternative.
-CHEAP_MODEL = "omlx/gemma-4-12B-it-qat-OptiQ-4bit"
+CHEAP_MODEL = "opencode/deepseek-v4-flash"
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a subagent instance of Clippy working on a delegated task. "
