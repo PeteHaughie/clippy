@@ -92,11 +92,12 @@ class Session:
         self.graph = build_session_graph()
         self._validate_topology()
 
+        cfg = self.shell.avatar.moods.config
+
         #: Per-conversation JSONL chat log (gated by config logging.enabled).
         #: The prime gets one file for its whole run; each sub-clippy gets its
         #: own file (see _spawn_worker). Everything flushes per line, so logs
         #: survive crashes/hangs.
-        cfg = self.shell.avatar.moods.config
         self.logging_enabled = bool((cfg.get("logging") or {}).get("enabled", True))
         self._prime_log = None
         if self.logging_enabled:
@@ -104,6 +105,17 @@ class Session:
 
             self._prime_log = ChatLogger(make_chat_log("prime"), label="prime")
             self._prime_log.marker("chat_start")
+
+        #: Background memory curator config (memory block). A proxy model owns
+        #: memory writes, batched every ``every_n_turns`` user turns (see
+        #: clippy/curator.py). Empty ``curator_model`` reuses the prime model.
+        memory_cfg = cfg.get("memory") or {}
+        self.memory_enabled = bool(memory_cfg.get("enabled", True))
+        self.memory_every_n_turns = max(1, int(memory_cfg.get("every_n_turns", 3)))
+        self.memory_curator_model = (memory_cfg.get("curator_model") or "").strip() or None
+        self._memory_batch: list[tuple[str, str]] = []   # (user_text, answer)
+        self._pending_user_text: str | None = None       # latest user message awaiting an answer
+        self._curator_busy = False
 
         self.pane = Pane(shell)
         shell.pane = self.pane
@@ -184,6 +196,7 @@ class Session:
             if kind == "chat":
                 if self._prime_log is not None:
                     self._prime_log.user(job[1])
+                self._pending_user_text = job[1]
                 self.prompt(job[1])
             elif kind == "ui_response":
                 self.ui_response(job[1], job[2])
@@ -434,6 +447,9 @@ class Session:
     #: listing so the dual nature (skill folder + deterministic command) is
     #: explicit rather than confusing.
     SKILL_ALIASES = {"move": "/move", "sub-clippy": "/delegate"}
+    #: Backing note for skills handled by a background process rather than a
+    #: command alias (memory → the memory curator).
+    SKILL_BACKING = {"memory": "background curator"}
 
     def _list_skills(self):
         from .memory import list_skills
@@ -450,8 +466,11 @@ class Session:
             if s["description"]:
                 line += f" — {s['description']}"
             alias = self.SKILL_ALIASES.get(s["name"])
+            backing = self.SKILL_BACKING.get(s["name"])
             if alias:
                 line += f" *(alias: `{alias}`)*"
+            elif backing:
+                line += f" *({backing})*"
             lines.append(line)
         lines.append("\n`/skill <name> [request]` invokes one (commands like "
                      "`/move` and `/delegate` are the built-in API — see `/help`).")
@@ -493,10 +512,25 @@ class Session:
                 return
             self._start_delegation(request)
             return
+        if skill_name == "memory":
+            # Memory writes are owned by the background curator (a proxy model
+            # with write/edit tools), not the sandboxed prime brain — spawn it
+            # directly with the request.
+            if not request:
+                self.pane.add_message(
+                    "clippy",
+                    f"{hint} — e.g. `/skill memory remember that I like espresso`.",
+                )
+                return
+            self._curate([("", request)])
+            self.pane.add_message(
+                "clippy", "Handing that to my memory curator."
+            )
+            return
 
-        # Everything else (memory, user-allowlisted skills) is a model tool:
-        # route the request to the brain so it invokes the skill and streams
-        # the result into the pane.
+        # Everything else (user-allowlisted skills) is a model tool: route the
+        # request to the brain so it invokes the skill and streams the result
+        # into the pane.
         if not request:
             self.pane.add_message(
                 "clippy",
@@ -550,6 +584,49 @@ class Session:
             )
         else:
             self.pane.stream_end("")
+        # Memory curation (batched): pair the user's message that started this
+        # turn with the final answer, and hand the batch to the background
+        # curator once it reaches the configured turn count.
+        if self.memory_enabled and self._pending_user_text is not None and clean:
+            self._memory_batch.append((self._pending_user_text, clean))
+            self._pending_user_text = None
+            if len(self._memory_batch) >= self.memory_every_n_turns and not self._curator_busy:
+                self._curate(self._memory_batch)
+                self._memory_batch = []
+
+    def _curate(self, turns: list[tuple[str, str]]):
+        """Fire-and-forget a background memory curator over ``turns``."""
+        from .curator import MemoryCurator, MockMemoryCurator
+        from .roots import MEMORY_DIR
+
+        transcript = "\n\n".join(
+            f"USER: {user}\nCLIPPY: {answer}" if user else answer
+            for user, answer in turns
+        )
+        model = self.memory_curator_model or self.model
+        # Use the module-level pi_ready (same gate as _spawn_worker), not a
+        # fresh import, so tests/offline fall back to the mock curator.
+        if self.real or pi_ready():
+            agent = MemoryCurator(transcript, model=model, memory_dir=MEMORY_DIR)
+        else:
+            agent = MockMemoryCurator(transcript, memory_dir=MEMORY_DIR)
+        self._curator_busy = True
+
+        def _drain():
+            while True:
+                try:
+                    ev = agent.queue.get(timeout=300)
+                except Exception:
+                    break
+                if ev.get("type") == "sub_exit":
+                    self._curator_busy = False
+                    break
+
+        import threading
+
+        threading.Thread(target=_drain, daemon=True).start()
+        agent.start()
+        print(f"[clippy] memory curator running ({len(turns)} turn(s))", flush=True)
 
     def _on_sub_done(self, failed: bool, report: str):
         self.shell.set_bubble("(sub-clippy finished — relaying)")

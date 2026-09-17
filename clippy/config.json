@@ -69,5 +69,11 @@
   "logging": {
     "enabled": true,
     "comment": "Write a timestamped JSONL chat transcript per conversation (prime + each sub-clippy) under ~/.clippy/logs. Set false to disable."
+  },
+  "memory": {
+    "enabled": true,
+    "every_n_turns": 3,
+    "curator_model": "",
+    "comment": "Background memory curator: a proxy model decides which facts are durable and persists them to ~/.clippy/memory. every_n_turns batches how often the curator runs; curator_model empty = reuse the prime model."
   }
 }
