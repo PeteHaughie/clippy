@@ -51,8 +51,10 @@ GATE_EXT = str(
 #: /delegate): move Clippy to a spot or absolute coords, ask where he is, or
 #: list what's possible. Anything else the user types goes to the brain.
 HELP_CMD = "/help"
+EXIT_CMD = "/exit"
 MOOD_CMD = "/mood"
 MOVE_CMD = "/move"
+QUIT_CMD = "/quit"
 REMIND_CMD = "/remind"
 SCHEDULE_CMD = "/schedule"
 SKILL_CMD = "/skill"
@@ -66,6 +68,7 @@ WHERE_CMD = "/where"
 HELP_TEXT = (
     "Here's what I can do — **commands** (built-in API):\n"
     "- `/help` — show this list\n"
+    "- `/exit` or `/quit` — close Clippy gracefully\n"
     "- `/skills` — list my skills; `/skill <name> [request]` invokes one\n"
     "- `/mood` — list my moods; `/mood <name>` plays any of the catalog's "
     "animations directly (e.g. `/mood greet`, `/mood working build`, "
@@ -295,6 +298,9 @@ class Session:
         if low.startswith(HELP_CMD):
             self.pane.add_message("clippy", HELP_TEXT)
             return
+        if low.startswith(EXIT_CMD) or low.startswith(QUIT_CMD):
+            self._quit()
+            return
         if low.startswith(WHERE_CMD):
             x, y = self.shell.position
             self.pane.add_message("clippy", f"I'm at ({x}, {y}).")
@@ -428,6 +434,14 @@ class Session:
             what = d["action"].get("text") or d["action"].get("mood") or d["action"].get("type")
             lines.append(f"- `{d['id']}` — **{format_wallclock(d['wake_at'])}** · {what}")
         self.pane.add_message("clippy", "\n".join(lines))
+
+    def _quit(self):
+        """Gracefully close the app: show a goodbye, then end the main loop so
+        main.py can stop the brain and the loggers/curator can flush."""
+        self.pane.add_message("clippy", "Goodbye! 👋")
+        # Exit on the next pump so the pane repaints the goodbye and any pending
+        # scheduler/log writes flush before the loop ends.
+        pyglet.clock.schedule_once(lambda dt: pyglet.app.exit(), 0.4)
 
     # ---------------------------------------------------------------- moods
 
