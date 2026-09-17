@@ -53,9 +53,19 @@ SMOOTHNESS = 0.15
 
 FRAME_RATE = 10.0  # gif is 10 fps
 
+#: How many frames before the animation's end the blast "lands" (stops
+#: advancing). The final frames are a long fade-out; ending a few frames early
+#: makes the sub-clippy hand-back snappier without clipping the peak of the
+#: blast.
+LAND_EARLY_FRAMES = 5
+
 
 class Explosion:
-    def __init__(self, live_key: bool = True, scale: float = 3.0):
+    def __init__(self, live_key: bool = True, scale: float = 3.0, fit: tuple[int, int] | None = None):
+        # If ``fit`` (max draw width, height) is given, scale the animation to
+        # fill it while preserving aspect ratio — the explosion frames are much
+        # larger than the avatar frame that sizes the window, so without this
+        # the blast overflows the window. Non-destructive: assets are untouched.
         self.scale = scale
         self.x = 0.0
         self.y = 0.0
@@ -68,6 +78,9 @@ class Explosion:
             pyglet.image.load(str(p)).get_texture()
             for p in sorted((ASSETS / "clippy" / base).glob("frame-*.png"))
         ]
+        if fit:
+            fw, fh = self.frame_size
+            self.scale = min(fit[0] / fw, fit[1] / fh)
         self._program = None
         if live_key:
             self._program = ShaderProgram(
@@ -100,7 +113,7 @@ class Explosion:
         while self._clock >= 1.0 / FRAME_RATE:
             self._clock -= 1.0 / FRAME_RATE
             self._frame_i += 1
-            if self._frame_i >= len(self._frames):
+            if self._frame_i >= len(self._frames) - LAND_EARLY_FRAMES:
                 self.playing = False
                 break
 

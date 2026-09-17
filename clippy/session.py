@@ -43,12 +43,31 @@ GATE_EXT = str(
     Path(__file__).resolve().parent / "extensions" / "clippy-gate.ts"
 )
 
-SUB_POS = (560, 420)
-
 #: Reliable chat commands the user types in the pane (host-intercepted, like
-#: /delegate): move Clippy to a spot or absolute coords, or ask where he is.
+#: /delegate): move Clippy to a spot or absolute coords, ask where he is, or
+#: list what's possible. Anything else the user types goes to the brain.
+HELP_CMD = "/help"
+MOOD_CMD = "/mood"
 MOVE_CMD = "/move"
 WHERE_CMD = "/where"
+
+#: Shown by /help (markdown — the pane renders clippy bubbles as markdown).
+HELP_TEXT = (
+    "Here's what I can do:\n"
+    "- `/help` — show this list\n"
+    "- `/mood` — list my moods; `/mood <name>` plays any of the catalog's "
+    "animations directly (e.g. `/mood greet`, `/mood working build`, "
+    "`/mood GestureRight`), and `/mood idle <animation>` pins a specific "
+    "idle animation\n"
+    "- `/delegate <task>` — hand a self-contained task to a sub-clippy worker\n"
+    "  and it reports back (e.g. `/delegate count the markdown files`)\n"
+    "- `/move <spot>` or `/move <x> <y>` — move me on screen (spots: "
+    "top-left / top-right / bottom-left / bottom-right / center / left / "
+    "right / top / bottom)\n"
+    "- `/where` — tell you where I am on screen\n\n"
+    "Anything else, just chat! You can also press **Tab** in the pane to "
+    "toggle between sandbox (read-only) and build (mutation-gated) mode."
+)
 
 
 class Session:
@@ -186,14 +205,21 @@ class Session:
 
     def prompt(self, text: str):
         stripped = text.strip()
-        if stripped.lower().startswith(WHERE_CMD):
+        low = stripped.lower()
+        if low.startswith(HELP_CMD):
+            self.pane.add_message("clippy", HELP_TEXT)
+            return
+        if low.startswith(WHERE_CMD):
             x, y = self.shell.position
             self.pane.add_message("clippy", f"I'm at ({x}, {y}).")
             return
-        if stripped.lower().startswith(MOVE_CMD):
+        if low.startswith(MOOD_CMD):
+            self._run_mood(stripped[len(MOOD_CMD):].strip())
+            return
+        if low.startswith(MOVE_CMD):
             self._run_move(self._command_move_spec(stripped[len(MOVE_CMD):].strip()))
             return
-        if stripped.lower().startswith(DELEGATE_CMD):
+        if low.startswith(DELEGATE_CMD):
             task = stripped[len(DELEGATE_CMD):].strip()
             if not task:
                 self.pane.add_message(
@@ -201,6 +227,17 @@ class Session:
                 )
                 return
             self._start_delegation(task)
+            return
+        if stripped.startswith("/"):
+            # Unknown slash command. Don't forward it to the brain: it would be
+            # read as a normal user message and can get mixed up with pending
+            # brain context (e.g. a delegation relay), producing the confused
+            # "stale command alongside fresh one" replies. Answer locally.
+            self.pane.add_message(
+                "clippy",
+                f"`{stripped}` isn't a command I know — try `/help` to see "
+                "what I can do.",
+            )
             return
         self.brain.prompt(text, streaming_behavior="followUp")
 
@@ -234,6 +271,120 @@ class Session:
             "clippy",
             "`/move <spot>` (top-left/top-right/bottom-left/bottom-right/"
             "center/left/right/top/bottom) or `/move <x> <y>`.",
+        )
+
+    # ---------------------------------------------------------------- moods
+
+    def _list_moods(self) -> str:
+        """Markdown summary of the moods AND every catalog animation, so the
+        user can pick any of them (``/mood <name>`` plays it directly)."""
+        moods = self.shell.avatar.moods
+        animations = self.shell.avatar.animations
+        lines = ["**Moods** (`/mood <mood>`):"]
+        # idle lives under the top-level config "idle" key, not the "moods"
+        # block, so list it explicitly (with its settle pose + pool).
+        lines.append(
+            f"- `idle` — {moods.idle['settle']} / pool: "
+            + ", ".join(moods.idle["pool"])
+        )
+        for name in sorted(moods.available_moods()):
+            spec = moods.moods[name]
+            anims = spec.get("animations") or []
+            hints = spec.get("hints") or {}
+            parts = [f"`{name}`"]
+            if anims:
+                parts.append(", ".join(anims))
+            if hints:
+                parts.append(f"hints: {', '.join(sorted(hints))}")
+            lines.append("- " + " — ".join(parts))
+        # Animations not referenced by any mood/hint can still be played
+        # directly — group them so the full catalog is discoverable.
+        referenced = set(moods.idle["pool"]) | {moods.idle["settle"]}
+        for spec in moods.moods.values():
+            referenced.update(spec.get("animations") or [])
+            referenced.update((spec.get("hints") or {}).values())
+        extras = sorted(a for a in animations if a not in referenced)
+        if extras:
+            lines.append("**Play any animation directly** (`/mood <name>`):")
+            groups = {}
+            for a in extras:
+                key = (
+                    "gestures" if a.startswith("Gesture")
+                    else "looks" if a.startswith("Look")
+                    else "misc"
+                )
+                groups.setdefault(key, []).append(a)
+            for key in ("gestures", "looks", "misc"):
+                if groups.get(key):
+                    lines.append(f"- {key}: {', '.join(f'`{a}`' for a in groups[key])}")
+        return "\n".join(lines)
+
+    def _run_mood(self, arg: str):
+        """Handle the /mood command: list the catalog, drive a mood (optionally
+        with a hint), or play ANY animation from the catalog directly. Uses
+        ``force=True`` so any mood can be shown even while a continuous mood is
+        running."""
+        moods = self.shell.avatar.moods
+        animations = self.shell.avatar.animations
+        parts = arg.split()
+        mood = parts[0].lower() if parts else ""
+        hint = parts[1].lower() if len(parts) > 1 else None
+        if not mood:
+            self.pane.add_message("clippy", self._list_moods())
+            return
+        # "idle" is a real mood but lives under the top-level config "idle"
+        # key, so it isn't in the "moods" catalog — add it to the valid set.
+        valid_moods = {"idle"} | set(moods.available_moods())
+        anim_lookup = {a.lower(): a for a in animations}
+
+        if mood in valid_moods:
+            hints = (moods.moods.get(mood) or {}).get("hints") or {}
+            # /mood idle <pool-animation> pins a specific idle-pool animation.
+            if mood == "idle" and hint:
+                pool = {a.lower(): a for a in moods.idle["pool"]}
+                if hint in pool:
+                    if not (self.shell.express("idle", force=True)
+                            and self.shell.play_idle_animation(pool[hint])):
+                        self.pane.add_message("clippy", f"`{pool[hint]}` couldn't be played.")
+                        return
+                    self.pane.add_message("clippy", f"Playing idle animation `{pool[hint]}`.")
+                    return
+            if hint is not None and hint not in hints:
+                if not hints:
+                    self.pane.add_message(
+                        "clippy", f"`{mood}` doesn't take a hint."
+                    )
+                else:
+                    self.pane.add_message(
+                        "clippy",
+                        f"`{mood}` doesn't have a `{hint}` hint — its hints are: "
+                        f"{', '.join(sorted(hints))}.",
+                    )
+                return
+            if not self.shell.express(mood, hint=hint, force=True):
+                self.pane.add_message("clippy", f"`{mood}` couldn't be played.")
+                return
+            resolved = moods.resolve(mood, hint)
+            label = mood + (f"/{hint}" if hint else "")
+            self.pane.add_message(
+                "clippy",
+                f"Playing `{label}`" + (f" — `{resolved}`" if resolved else "") + ".",
+            )
+            return
+
+        # Not a mood — maybe a direct animation name from the catalog.
+        if mood in anim_lookup:
+            name = anim_lookup[mood]
+            if not self.shell.play_animation(name):
+                self.pane.add_message("clippy", f"`{name}` couldn't be played.")
+                return
+            self.pane.add_message("clippy", f"Playing animation `{name}`.")
+            return
+
+        self.pane.add_message(
+            "clippy",
+            f"`{mood}` isn't a mood or animation I know — try `/mood` for the "
+            "full list.",
         )
 
     def ui_response(self, rid, payload: dict):
@@ -314,9 +465,22 @@ class Session:
         else:
             agent = MockSubAgent(task=task)
             print("[clippy] PI not ready — delegating to mock sub-agent")
-        shell = ClippyShell(position=SUB_POS)
+        # Sub-clippy renders at 75% of Prime's scale and spawns beside him (to
+        # the right), never directly on top — the sub window is sized from the
+        # smaller avatar, so it also fits the delegate bubble on screen.
+        prime_scale = getattr(self.shell.avatar, "scale", 3.0)
+        sub_scale = round(prime_scale * 0.75, 2)
+        px, py = self.shell.position
+        pw, _ph = self.shell.size
+        sx, sy = px + pw + 12, py
+        shell = ClippyShell(scale=sub_scale, position=(sx, sy))
         ctrl = SubClippyController(shell, agent, on_complete=on_complete)
         shell.show()
+        # On X11/XWayland the constructor's set_location runs before the window
+        # is mapped and the WM ignores it, so both shells land at the same spot
+        # ("sub-clippy on top of Prime"). Re-assert the position now that the
+        # window is mapped so the sub actually sits beside Prime.
+        shell.set_location(sx, sy)
         pyglet.clock.schedule_interval(shell.update, 1 / 60)
         pyglet.clock.schedule_interval(ctrl.update, 1 / 60)
         agent.start()

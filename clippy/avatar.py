@@ -102,12 +102,20 @@ class Avatar:
         self._wrap = False
         self._oneshot = False
 
-        # Idle rotation state (playback projection).
-        self._idle_mode = False
+        # Idle rotation state (playback projection). Starts ON: the avatar's initial
+        # mood is "idle", so idle rotation should run from the very first frame
+        # (a freshly started Prime sits idle before any brain turn).
+        self._idle_mode = True
         self._idle_elapsed = 0.0
         self._idle_rotating = False
         self._idle_rot_elapsed = 0.0
         self._idle_last = None
+        #: A specific idle-pool animation pinned by /mood idle <name>: plays on
+        #: loop until any other mood is expressed (rotation is paused while set).
+        self._idle_pinned: str | None = None
+        #: A directly-played non-idle animation (play_animation) that should
+        #: settle back to idle when it finishes.
+        self._direct_oneshot = False
 
         self._play(self.moods.idle["settle"], wrap=False)
 
@@ -127,15 +135,27 @@ class Avatar:
     def current_mood(self) -> str:
         return self.mood_sm.current
 
-    def express(self, mood: str, hint: str | None = None) -> bool:
+    def express(self, mood: str, hint: str | None = None, force: bool = False) -> bool:
         """Drive the avatar into a semantic mood. Returns False if ignored.
 
         The interruption rules live in the MoodSM's ``mood_allow`` guard; the
-        resolved animation is the projection of the (allowed) request.
+        resolved animation is the projection of the (allowed) request. Pass
+        ``force=True`` (user-driven commands) to bypass the guard so any mood
+        can be shown even while a continuous mood is running.
         """
         if self.mood_sm.current == mood:
+            # Already in this mood. A fresh avatar starts with current == "idle"
+            # yet _idle_mode is still False, so idle rotation would never start
+            # unless we initialise it here (also makes /mood idle idempotent).
+            if mood == "idle" and not self._idle_mode:
+                self._idle_mode = True
+                self._idle_rotating = False
+                self._idle_elapsed = 0.0
+                self._idle_rot_elapsed = 0.0
+                self._idle_pinned = None
+                self._play(self.moods.idle["settle"], wrap=False)
             return True  # already there
-        if not self.mood_sm.fire("express", mood):
+        if not self.mood_sm.fire("express", mood, force=force):
             return False  # one-shot dropped while a continuous mood runs
         name = self.moods.resolve(mood, hint)
         continuous = self.moods.is_continuous(mood)
@@ -143,10 +163,50 @@ class Avatar:
         self._idle_rotating = False
         self._idle_elapsed = 0.0
         self._idle_rot_elapsed = 0.0
+        self._idle_pinned = None  # any new mood releases a pinned idle animation
         if self._idle_mode:
             self._play(self.moods.idle["settle"], wrap=False)
         else:
             self._play(name, wrap=continuous)
+        return True
+
+    def play_idle_animation(self, name: str) -> bool:
+        """Pin a specific idle-pool animation, looping until a mood is called.
+
+        Used by ``/mood idle <animation>`` so the user can pick exactly which
+        idle animation plays (rotation is paused while pinned). Returns False
+        for an unknown animation name.
+        """
+        if name not in self.animations:
+            return False
+        self._idle_mode = True
+        self._idle_pinned = name
+        self._idle_rotating = False
+        self._idle_elapsed = 0.0
+        self._idle_rot_elapsed = 0.0
+        self._direct_oneshot = False
+        self._play(name, wrap=True)
+        return True
+
+    def play_animation(self, name: str) -> bool:
+        """Play any animation from the catalog directly (``/mood <name>``).
+
+        Idle-pool animations loop (pinned, like ``/mood idle <name>``); any
+        other animation plays once and then settles back to idle rotation.
+        Returns False for an unknown animation name.
+        """
+        if name not in self.animations:
+            return False
+        pool = set(self.moods.idle["pool"])
+        if name in pool:
+            return self.play_idle_animation(name)
+        self._idle_mode = False
+        self._idle_rotating = False
+        self._idle_elapsed = 0.0
+        self._idle_rot_elapsed = 0.0
+        self._idle_pinned = None
+        self._direct_oneshot = True
+        self._play(name, wrap=False)
         return True
 
     def _settle_idle(self):
@@ -155,6 +215,8 @@ class Avatar:
         self._idle_rotating = False
         self._idle_elapsed = 0.0
         self._idle_rot_elapsed = 0.0
+        self._idle_pinned = None
+        self._direct_oneshot = False
         self._play(self.moods.idle["settle"], wrap=False)
 
     def _next_idle_animation(self) -> str:
@@ -207,12 +269,14 @@ class Avatar:
             self.sprite.image = self._frames[self._frame_i]
 
     def _oneshot_done(self):
-        if self.mood_sm.current != "idle":
+        if self.mood_sm.current != "idle" or self._direct_oneshot:
             self._settle_idle()
 
     def _update_idle(self, dt: float):
         if not self._idle_mode:
             return
+        if self._idle_pinned:
+            return  # keep playing the pinned idle animation
         cfg = self.moods.idle
         # Idle rotation is opt-in (idle.rotate). When on, the avatar loops
         # through the idle pool from initial_delay_sec until a mood is called.

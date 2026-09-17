@@ -312,8 +312,31 @@
   // Live reasoning stream: one growing bubble per assistant turn. Python
   // re-sends the full accumulated thinking/answer text each delta; marked
   // renders the partial markdown, so formatting appears as it streams.
+  // Deltas can arrive far faster than the pane can re-parse + re-render the
+  // whole buffer, so coalesce them: render at most once per ~50ms, always
+  // flushing the latest before a bubble is finalized.
   let currentStream = null;
+  let streamTimer = null;
+  let pendingRender = null;
+  function flushStreamRender() {
+    if (streamTimer) { clearTimeout(streamTimer); streamTimer = null; }
+    const fn = pendingRender;
+    pendingRender = null;
+    if (fn) fn();
+  }
+  function scheduleStreamRender(fn) {
+    pendingRender = fn;
+    if (streamTimer) return;
+    streamTimer = setTimeout(() => {
+      streamTimer = null;
+      const f = pendingRender;
+      pendingRender = null;
+      if (f) f();
+    }, 50);
+  }
   function finalizeStream(finalText) {
+    // Render any coalesced delta before swapping in the final text.
+    flushStreamRender();
     // If the turn never streamed (e.g. an answer arrives with no deltas),
     // open the bubble now so the final text still surfaces in the pane.
     let s = currentStream;
@@ -361,14 +384,20 @@
     if (text && text.trim()) {
       s.details.open = true;
       s.summary.textContent = 'Thinking';
-      setMarkdown(s.thinking, text);
+      scheduleStreamRender(() => {
+        setMarkdown(s.thinking, text);
+        chat.scrollTop = chat.scrollHeight;
+      });
     }
-    chat.scrollTop = chat.scrollHeight;
   }
   function streamText(text) {
     const s = currentStream || makeStreamBubble();
-    if (text) setMarkdown(s.answer, text);
-    chat.scrollTop = chat.scrollHeight;
+    if (text) {
+      scheduleStreamRender(() => {
+        setMarkdown(s.answer, text);
+        chat.scrollTop = chat.scrollHeight;
+      });
+    }
   }
   function send() {
     const t = input.value ? String(input.value).trim() : '';

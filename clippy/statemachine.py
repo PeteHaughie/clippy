@@ -66,16 +66,21 @@ class StateMachine:
 
     # -------------------------------------------------------------- control
 
-    def fire(self, trigger: str, *args) -> bool:
+    def fire(self, trigger: str, *args, force: bool = False) -> bool:
         """Apply the first matching (src, trigger) transition whose guard
-        passes. Returns True if a transition was taken."""
+        passes. Returns True if a transition was taken.
+
+        ``force=True`` skips guard evaluation — used for user-driven commands
+        (e.g. ``/mood``) that must switch even when the automatic controller's
+        interruption rules would otherwise drop the transition.
+        """
         for tr in self.config["transitions"]:
             if tr["src"] != "*" and tr["src"] != self.current:
                 continue
             if tr["trigger"] != trigger:
                 continue
             guard = tr.get("guard")
-            if guard:
+            if not force and guard:
                 guard_fn = self.guards.get(guard)
                 if guard_fn and not guard_fn(self, *args):
                     continue

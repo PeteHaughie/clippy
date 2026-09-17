@@ -56,6 +56,12 @@ ONE_SHOT_HOLD = 1.5  # seconds after a one-shot mood before moving on
 
 PRIME_POS = (60, 420)
 
+#: Avatar pump interval (ms) in the GTK-integrated loop. ~30 fps is plenty — the
+#: sprite animation changes at ~10 fps and the idle/answer timing is time-based —
+#: and it halves main-thread load, leaving the WebKitGTK pane room to handle
+#: typing promptly (it shares the same main loop).
+PUMP_MS = 33
+
 
 def run_integrated():
     """Run the pyglet avatar windows from a GTK main loop (Linux --brain only).
@@ -63,7 +69,8 @@ def run_integrated():
     On macOS, pyglet integrates with the Cocoa event loop itself, so the pane's
     WKWebView and the avatar share a thread with no extra work. On Linux the
     WebKitGTK pane needs GLib's main loop on the main thread, so the avatar is
-    pumped from a ~16ms GLib timer exactly the way pyglet's own main loop would:
+    pumped from a ~30fps GLib timer (see ``PUMP_MS``) exactly the way pyglet's
+    own main loop would:
     ``clock.tick()`` for simulation + per-window draw/flip for the frame. The
     loop ends when pyglet wants out (Q, or the last Clippy window closing),
     at which point GTK quits too.
@@ -82,7 +89,7 @@ def run_integrated():
             return False
         return True
 
-    GLib.timeout_add(16, _pump)
+    GLib.timeout_add(PUMP_MS, _pump)
     print("[clippy] running integrated pyglet+GTK loop", flush=True)
     Gtk.main()
 

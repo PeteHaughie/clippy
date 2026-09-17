@@ -38,6 +38,7 @@ brain still run, Clippy just has nowhere to draw his chart.
 
 import dataclasses
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -242,8 +243,6 @@ if sys.platform == "darwin":
             #: mutations must never run on the bridge thread or the pane jumps.
             self.on_move = None          # on_move(data) → queued, run on main thread
             self.on_resize = None        # on_resize(data) → queued, run on main thread
-            self._val = 0
-            self._dir = 1
             #: User-driven geometry: the pane's last dragged/resized frame and the
             #: shell location it was anchored to then. hide()/summon() reuse it;
             #: if Clippy himself moves, the pane re-anchors beside him.
@@ -310,7 +309,6 @@ if sys.platform == "darwin":
         def _on_webview_loaded(self):
             self._loaded = True
             self._evaluate("window.__focusInput();")
-            self.set_progress(self._val)
 
         # -------------------------------------------------------------- bridge
 
@@ -468,23 +466,10 @@ if sys.platform == "darwin":
         # ------------------------------------------------- API (from _JsMixin)
 
         def start_driver(self):
-            """Optional demo driver: tick the pane's progress bar."""
-            pyglet.clock.schedule_interval(self._drive, 0.4)
-            # Track the cursor while the pane is being dragged/resized (main thread).
+            """Track the cursor while the pane is dragged/resized (main thread).
+            (The demo progress-bar driver was removed — it evaluated JS in the
+            webview on a timer forever, which made the pane sluggish.)"""
             pyglet.clock.schedule_interval(self._geom_tick, 1 / 60)
-
-        def _drive(self, dt):
-            if self.webview is None or self.panel is None or not self.panel.isVisible():
-                return
-            v = self._val + 5 * self._dir
-            if v >= 100:
-                v = 100
-                self._dir = -1
-            if v <= 0:
-                v = 0
-                self._dir = 1
-            self._val = v
-            self.set_progress(v)
 
         # ------------------------------------------------------------- geometry
 
@@ -645,6 +630,11 @@ else:
             pass
 
     try:
+        # WebKitGTK's accelerated-compositing path is slow under XWayland without
+        # GPU acceleration and shares the main thread with the avatar pump, which
+        # makes pane input feel laggy. Force the simpler (non-composited)
+        # renderer; must be set before WebKit initialises.
+        os.environ.setdefault("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
         import gi
 
         gi.require_version("Gdk", "3.0")
@@ -682,8 +672,6 @@ else:
                 self.on_mode_toggle = None
                 self.on_move = None
                 self.on_resize = None
-                self._val = 0
-                self._dir = 1
                 #: User-driven geometry + in-flight drag/resize bookkeeping —
                 #: identical semantics to the macOS backend (see above).
                 self._user_origin: tuple[float, float] | None = None
@@ -753,7 +741,6 @@ else:
                     for js in pending:
                         self._evaluate(js)
                     self._evaluate("window.__focusInput();")
-                    self.set_progress(self._val)
 
             # -------------------------------------------------------------- bridge
 
@@ -905,27 +892,10 @@ else:
             # ------------------------------------------------- API (from _JsMixin)
 
             def start_driver(self):
-                """Optional demo driver: tick the pane's progress bar + track the
-                cursor while the pane is dragged/resized (main thread)."""
-                pyglet.clock.schedule_interval(self._drive, 0.4)
+                """Track the cursor while the pane is dragged/resized (main thread).
+                (The demo progress-bar driver was removed — it evaluated JS in the
+                webview on a timer forever, which made the pane sluggish.)"""
                 pyglet.clock.schedule_interval(self._geom_tick, 1 / 60)
-
-            def _drive(self, dt):
-                if (
-                    self._webview is None
-                    or self._window is None
-                    or not self._window.is_visible()
-                ):
-                    return
-                v = self._val + 5 * self._dir
-                if v >= 100:
-                    v = 100
-                    self._dir = -1
-                if v <= 0:
-                    v = 0
-                    self._dir = 1
-                self._val = v
-                self.set_progress(v)
 
             # ------------------------------------------------------------- geometry
 

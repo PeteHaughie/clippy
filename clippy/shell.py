@@ -9,7 +9,7 @@ but is off by default so the window can be grabbed and dragged."""
 
 import pyglet
 from pyglet.gl import current_context
-from pyglet.window import FPSDisplay, Window
+from pyglet.window import Window
 
 from .avatar import Avatar, frame_size
 from .explosion import Explosion
@@ -40,10 +40,14 @@ class ClippyShell(Window):
         # context; the pyglet Window (and its context) only exists from here on.
         self.switch_to()
         self.avatar = Avatar(scale=scale)
-        self.explosion = Explosion(live_key=live_key, scale=scale)
+        # Fit the explosion to the window's draw area: the blast frames are far
+        # larger than the avatar frame that sizes the window, so scale them down
+        # (aspect-preserving) instead of letting the animation overflow.
+        self.explosion = Explosion(
+            live_key=live_key, scale=scale, fit=(w - 2 * padding, h - 2 * padding)
+        )
         self.set_location(*position)
         self.passthrough = False
-        self.fps = FPSDisplay(window=self)
         self._exploded = False
         self.thinking = False
         #: Prime-shell status (Phase 3): sandbox/build badge + pending-dialog
@@ -51,21 +55,8 @@ class ClippyShell(Window):
         self.mode: str | None = None
         self.dialog_pending = False
         self._bubble = ""
-        self.label = self._make_label(w - 12)
         if prev is not None:
             prev.set_current()
-
-    def _make_label(self, width: int):
-        return pyglet.text.Label(
-            "",
-            font_name="Helvetica",
-            font_size=10,
-            color=(255, 255, 255, 255),
-            multiline=True,
-            width=width,
-            anchor_x="left",
-            anchor_y="bottom",
-        )
 
     def show(self, state: bool = True):
         self.set_visible(state)
@@ -171,9 +162,13 @@ class ClippyShell(Window):
         self.set_location(x, y)
         return True
 
-    def express(self, mood: str, hint: str | None = None, text: str | None = None):
-        """Drive the avatar's mood (future controller / socket entry point)."""
-        accepted = self.avatar.express(mood, hint)
+    def express(self, mood: str, hint: str | None = None, text: str | None = None, force: bool = False):
+        """Drive the avatar's mood (future controller / socket entry point).
+
+        ``force=True`` bypasses the mood-interruption rules for user-driven
+        commands (``/mood``).
+        """
+        accepted = self.avatar.express(mood, hint, force=force)
         if text is not None:
             self.thinking = False if mood != "thinking" else True
         return accepted
@@ -181,6 +176,14 @@ class ClippyShell(Window):
     def set_bubble(self, text: str):
         """Replace the speech-bubble line shown above the avatar."""
         self._bubble = text
+
+    def play_idle_animation(self, name: str) -> bool:
+        """Pin a specific idle-pool animation (``/mood idle <name>``)."""
+        return self.avatar.play_idle_animation(name)
+
+    def play_animation(self, name: str) -> bool:
+        """Play any catalog animation directly (``/mood <name>``)."""
+        return self.avatar.play_animation(name)
 
     def dismiss(self):
         """Close this window (used after the sub-clippy explosion)."""
@@ -210,48 +213,19 @@ class ClippyShell(Window):
         # Draw under this window's OWN context. on_draw can be dispatched from
         # pyglet's queued event list (dispatch_pending_events) at a moment when
         # a different window's context is current (e.g. a sub-clippy's window
-        # was just shown/exposed). Without this, the label/sprite GL objects
-        # get committed under a foreign context and the next draw raises a
-        # GLException from glBufferSubData. No-op when already current.
+        # was just shown/exposed). No-op when already current.
         self.switch_to()
         self.clear()
         pad = 20
         if not self._exploded:
             self.avatar.sprite.position = (pad, pad, 0)
             self.avatar.draw()
-        self.explosion.x = pad
-        self.explosion.y = pad
+        # Center the fitted explosion in the window's draw area.
+        ew = self.explosion.frame_size[0] * self.explosion.scale
+        eh = self.explosion.frame_size[1] * self.explosion.scale
+        self.explosion.x = pad + (self.width - 2 * pad - ew) / 2
+        self.explosion.y = pad + (self.height - 2 * pad - eh) / 2
         self.explosion.draw()
-        self.label.x = pad
-        self.label.y = int(pad + self.avatar.frame_h * self.avatar.scale) + 6
-        mood = self.avatar.current_mood
-        bubble = self._bubble.replace("\n", " ") if self._bubble else "(idle)"
-        parts = []
-        if self.mode:
-            parts.append(f"mode:{'🛡' if self.mode == 'sandbox' else '🔨'}")
-        parts.append(f"mood:{mood}")
-        if self.dialog_pending:
-            parts.append("dialog:waiting")
-        self.label.text = (
-            f"{' · '.join(parts)} · {bubble} (T think / E explode / Q quit)"
-        )
-        try:
-            self.label.draw()
-        except pyglet.gl.lib.GLException:
-            # pyglet 2.1.x text layout can overflow its vertex buffer
-            # (glBufferSubData -> GL_INVALID_VALUE) when the status label's
-            # text length swings hard while a second window's on_draw
-            # interleaves. The label is cosmetic; rebuild it and keep the loop
-            # alive instead of crashing.
-            self.label = self._make_label(self.width - 12)
-            self.label.text = (
-                f"{' · '.join(parts)} · {bubble} (T think / E explode / Q quit)"
-            )
-            try:
-                self.label.draw()
-            except pyglet.gl.lib.GLException:
-                pass  # if the fresh label also fails, skip drawing this frame
-        self.fps.draw()
 
     def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
         """Drag Clippy around by grabbing any part of his window. Mouse deltas
