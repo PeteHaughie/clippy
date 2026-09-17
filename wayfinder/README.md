@@ -32,5 +32,6 @@ Legend: ✅ closed · ⬜ open but blocked · 👀 open/unblocked/unclaimed (tak
 | 024 | Roots of truth for paths/config/scratch (P4) | refactor | ✅ | 021, 022, 023 | [024-roots-of-truth.md](tickets/024-roots-of-truth.md) |
 | 025 | OS-level alarms independent of Clippy | research | 👀 | — | [025-os-level-notifications.md](tickets/025-os-level-notifications.md) |
 | 026 | Sub-clippys can schedule tasks (delegated scheduling) | research | 👀 | — | [026-subclippy-scheduling.md](tickets/026-subclippy-scheduling.md) |
+| 027 | Generative UI surface + media primitives in the graph | task | 👀 | — | [027-generative-ui-surface.md](tickets/027-generative-ui-surface.md) |
 
 **Frontier (takeable next):** the control plane is now a typed graph (`clippy/model.py` + `session.py`). Remaining candidates: **live full-loop acceptance run** (needs a real Aqua session — `--brain` pane typing, Tab→build approval card, `/delegate` sub-clippy), graph-refactor leftover **P5** typed `Task` node, and **RAG memory** if markdown memory proves thin.
