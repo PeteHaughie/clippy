@@ -29,12 +29,22 @@ constraints, and this entry point just constructs a :class:`Session`.
 """
 
 import argparse
+import os
 import sys
 
 # Import the pyobjc runtime BEFORE pyglet so both ObjC bridges share one
-# runtime cleanly (proven harness in w1c_pane_spike.py). The pane module
-# imports AppKit/WebKit after this guard.
-import objc  # noqa: F401
+# runtime cleanly (proven harness in w1c_pane_spike.py) — macOS only. On other
+# platforms pyglet is enough; the pane module picks its own backend (see
+# clippy/pane.py).
+if sys.platform == "darwin":
+    import objc  # noqa: F401  (ensures the pyobjc runtime is up first)
+
+# Force the GTK chat pane onto the X11 (XWayland) backend on Linux so window
+# move()/resize() work for anchoring it beside the avatar; pyglet already runs
+# under XWayland here. Must happen before the pane module initialises GTK.
+if sys.platform != "darwin":
+    os.environ.setdefault("GDK_BACKEND", "x11")
+
 import pyglet
 
 from clippy.moods import Moods
@@ -45,6 +55,36 @@ from clippy.subagent import DEFAULT_MODEL, DEFAULT_TASK
 ONE_SHOT_HOLD = 1.5  # seconds after a one-shot mood before moving on
 
 PRIME_POS = (60, 420)
+
+
+def run_integrated():
+    """Run the pyglet avatar windows from a GTK main loop (Linux --brain only).
+
+    On macOS, pyglet integrates with the Cocoa event loop itself, so the pane's
+    WKWebView and the avatar share a thread with no extra work. On Linux the
+    WebKitGTK pane needs GLib's main loop on the main thread, so the avatar is
+    pumped from a ~16ms GLib timer exactly the way pyglet's own main loop would:
+    ``clock.tick()`` for simulation + per-window draw/flip for the frame. The
+    loop ends when pyglet wants out (Q, or the last Clippy window closing),
+    at which point GTK quits too.
+    """
+    from gi.repository import GLib, Gtk
+
+    def _pump(*_unused):
+        pyglet.clock.tick()
+        for window in list(pyglet.app.windows):
+            window.switch_to()
+            window.dispatch_events()
+            window.dispatch_event("on_draw")
+            window.flip()
+        if pyglet.app.event_loop.has_exit:
+            Gtk.main_quit()
+            return False
+        return True
+
+    GLib.timeout_add(16, _pump)
+    print("[clippy] running integrated pyglet+GTK loop", flush=True)
+    Gtk.main()
 
 
 def duration_of(avatar, name: str) -> float:
@@ -118,7 +158,14 @@ def main() -> int:
             hold = duration_of(shell.avatar, resolved) + ONE_SHOT_HOLD
         if hold:
             pyglet.clock.schedule_once(lambda dt: pyglet.app.exit(), hold)
-    pyglet.app.run()
+    if (
+        args.brain is not None
+        and session is not None
+        and getattr(session.pane, "wants_integrated_loop", False)
+    ):
+        run_integrated()
+    else:
+        pyglet.app.run()
     if session is not None:
         session.brain.stop()
     return 0

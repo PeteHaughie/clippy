@@ -1,4 +1,9 @@
-# Clippy runtime dependencies (macOS: pyobjc provides the AppKit/Foundation/WebKit
-# frameworks the avatar pane needs). Verified on Python 3.11.13.
+# Clippy runtime dependencies (platform-marked).
+# macOS: pyobjc provides the AppKit/Foundation/WebKit frameworks the WKWebView pane needs.
+# Linux: PyGObject + pycairo host the same pane HTML in a WebKitGTK 4.1 window
+#        (system libs: webkit2gtk-4.1, gtk3, girepository). Verified on
+#        Python 3.11.13 (macOS) and 3.14 (Linux).
 pyglet~=2.1.16
-pyobjc~=10.3.2
+pyobjc~=10.3.2; sys_platform == "darwin"
+PyGObject>=3.54; sys_platform == "linux"
+pycairo>=1.29; sys_platform == "linux"

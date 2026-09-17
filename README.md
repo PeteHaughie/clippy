@@ -1,14 +1,14 @@
 # Clippy
 
-A floating desktop companion for macOS — an animated **Clippy** avatar in a transparent,
-always-on-top window with a retro chat pane, powered by **Pi** (pi.dev) as its brain and
-doer.
+A floating desktop companion for **macOS and Linux** — an animated **Clippy** avatar in a
+transparent, always-on-top window with a retro chat pane, powered by **Pi** (pi.dev) as its
+brain and doer.
 
 Clippy is a *projection into userland from the system*: **Pi owns tools, skills, providers,
 sessions and approvals**; Clippy owns the desktop surface (the avatar, the w1c chat pane,
 dialog cards), persistent memory, and sub-clippy orchestration. It is a local demo/experiment
-— Python all the way down, with a pyglet window, a pyobjc `NSPanel` + `WKWebView` pane, and a
-long-lived Pi RPC process as the prime brain.
+— Python all the way down, with a pyglet window, a chat pane hosted by `WKWebView` (macOS,
+pyobjc) or `WebKitGTK` (Linux, PyGObject), and a long-lived Pi RPC process as the prime brain.
 
 ---
 
@@ -34,11 +34,12 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
 ## Features
 
 - **Floating animated avatar** — transparent, always-on-top, draggable overlay window
-  (pyglet 2.x + pyobjc). Animated moods (thinking / working / listening / celebrating / …)
+  (pyglet 2.x). Animated moods (thinking / working / listening / celebrating / …)
   driven by the conversation state, with a live speech bubble and status line.
-- **Retro chat pane** — a borderless transparent `NSPanel` hosting a `WKWebView` running the
-  vendored **w1c** retro web-components chat UI (windows-95 theme). Resizable, draggable,
-  re-anchors beside Clippy when he moves.
+- **Retro chat pane** — a borderless always-on-top window hosting the **w1c** retro
+  web-components chat UI (windows-95 theme). macOS renders it in a transparent `NSPanel` +
+  `WKWebView`; Linux in a `WebKitGTK` window (same vendored HTML/JS, same bridge).
+  Resizable, draggable, re-anchors beside Clippy when he moves.
 - **Live markdown reasoning stream** — Pi's `thinking` (reasoning) and answer deltas stream
   into one growing bubble per turn, rendered as formatted HTML (`**bold**`, lists, code
   blocks, tables, links…) via a vendored `marked` parser. Thinking is collapsible; the final
@@ -110,9 +111,12 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
 
 ## Requirements
 
-- **macOS** — the pane uses AppKit/WebKit (`WKWebView`, `NSPanel`); everything is Cocoa.
-- **Python 3.11+** with a venv; dependencies are in [`requirements.txt`](requirements.txt)
-  (`pyglet` + `pyobjc`, verified on 3.11.13: `pyglet 2.1.16`, `pyobjc 10.3.2`).
+- **macOS or Linux.** The chat pane runs on macOS (AppKit `WKWebView`) and Linux
+  (WebKitGTK 4.1). On any other platform — or a Linux box missing WebKitGTK — the pane
+  degrades to a no-op and the avatar/brain paths still run.
+- **Python 3.11+** with a venv; dependencies are in [`requirements.txt`](requirements.txt),
+  platform-marked: `pyglet` everywhere, `pyobjc~=10.3.2` on macOS only (verified on 3.11.13),
+  `PyGObject` + `pycairo` on Linux only (verified on 3.14).
 - **Pi CLI** — `pi` 0.85.x (the `@earendil-works/pi-coding-agent` npm package, installed e.g.
   at `/opt/homebrew/bin/pi`) with a real provider configured:
   - **oMLX** — a local model box (tailnet or local), provider prefix `omlx`, or
@@ -127,9 +131,20 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
 ## Setup
 
 ```bash
+# 0. Linux only: the chat pane needs WebKitGTK. Its GIR typelib + shared lib
+#    ship on most desktop distros already; if the pane reports
+#    "[pane] WebKitGTK unavailable", install them (they are runtime libs, and
+#    normally already pulled in by a desktop browser):
+#      sudo apt-get install -y gir1.2-webkit2-4.1
+#    PyGObject builds from source against girepository, whose dev files are
+#    NOT installed by default. No sudo needed — stage them inside the venv:
+#      tools/stage-girepository.sh
+#    then install with the staged pkg-config on PATH (the command it echoes).
+
 # 1. Python environment
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+PKG_CONFIG_PATH="$PWD/.venv/gi-dev/usr/lib/x86_64-linux-gnu/pkgconfig" \
+  .venv/bin/pip install -r requirements.txt
 
 # 2. Pi (see pi's own docs; already-configured provider required for real mode)
 npm install -g @earendil-works/pi-coding-agent   # or install per the pi docs
@@ -138,6 +153,10 @@ pi --list-models                                  # should list omlx… or openc
 # 3. Run — with a provider it goes real; without one it falls back to mock
 python main.py --brain
 ```
+
+On Linux, `PKG_CONFIG_PATH` + `CFLAGS` are only needed while installing PyGObject;
+the pane then runs without them. On macOS the same `pip install -r requirements.txt`
+is all that's required (pyobjc supplies everything).
 
 No other config is required to start: sandbox mode, the skills allowlist, memory index and
 scratch dir are all created/used on demand. See [Configuration](#configuration).
@@ -211,7 +230,7 @@ clippy/
   model.py           typed graph: nodes/edges/constraints + Ev catalog + state-machine configs
   events.py          normalize() (both Pi wire shapes) + AgentEventRouter
   statemachine.py    generic state-machine runtime over graph-declared configs
-  pane.py            transparent WKWebView NSPanel, JS↔Python bridge, markdown streaming API
+  pane.py            chat pane: WKWebView NSPanel (macOS) | WebKitGTK window (Linux), JS↔Python bridge, markdown streaming API
   shell.py           floating pyglet window (avatar + explosion + position API)
   avatar.py, moods.py, explosion.py   avatar playback, mood rules, explosion
   memory.py          persistent memory (INDEX.md) + skills allowlist

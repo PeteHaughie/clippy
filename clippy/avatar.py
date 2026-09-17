@@ -17,6 +17,7 @@ moods, so he only animates when the chat (or a key) actually triggers a mood.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pyglet
@@ -27,6 +28,17 @@ from .statemachine import StateMachine
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 MAP_PNG = ASSETS / "clippy" / "map.png"
 AGENT_JSON = ASSETS / "clippy" / "agent.json"
+
+
+def frame_size(source: Path = AGENT_JSON) -> tuple[int, int]:
+    """Read the sprite sheet's frame size without touching GL.
+
+    The window must be sized from agent.json *before* any GL object
+    (texture/sprite/shader) is created, because those need a current
+    OpenGL context — and the context only exists once the pyglet Window
+    has been constructed."""
+    data = json.loads(Path(source).read_text())
+    return tuple(data["framesize"])
 
 
 def _mood_allow(moods: Moods, sm: StateMachine, mood: str) -> bool:
@@ -202,9 +214,8 @@ class Avatar:
         if not self._idle_mode:
             return
         cfg = self.moods.idle
-        # Idle rotation is opt-in (idle.rotate). Off by default: Clippy holds
-        # the RestPose settle pose so he only animates when a mood is actually
-        # triggered (chat, key, controller).
+        # Idle rotation is opt-in (idle.rotate). When on, the avatar loops
+        # through the idle pool from initial_delay_sec until a mood is called.
         if not cfg.get("rotate", False):
             return
         if not self._idle_rotating:

@@ -8,19 +8,26 @@ click-through mode is still available via :meth:`ClippyShell.toggle_passthrough`
 but is off by default so the window can be grabbed and dragged."""
 
 import pyglet
+from pyglet.gl import current_context
 from pyglet.window import FPSDisplay, Window
 
-from .avatar import Avatar
+from .avatar import Avatar, frame_size
 from .explosion import Explosion
 
 
 class ClippyShell(Window):
     def __init__(self, scale: float = 3.0, live_key: bool = True, position=(60, 420)):
-        self.avatar = Avatar(scale=scale)
-        self.explosion = Explosion(live_key=live_key, scale=scale)
+        # Whichever context was current before this window is created must be
+        # restored before returning: the new window's switch_to() below makes
+        # ITS context current, and GL objects of OTHER shells (label, sprite)
+        # are invalid if built/drawn from a foreign context. Restoring keeps
+        # the caller's window current so e.g. spawning a sub-clippy mid-loop
+        # never taints the main shell's GL state.
+        prev = current_context
         padding = 20
-        w = int(self.avatar.frame_w * scale) + padding * 2
-        h = int(self.avatar.frame_h * scale) + padding * 2
+        fw, fh = frame_size()
+        w = int(fw * scale) + padding * 2
+        h = int(fh * scale) + padding * 2
         super().__init__(
             w,
             h,
@@ -29,6 +36,11 @@ class ClippyShell(Window):
             style=Window.WINDOW_STYLE_OVERLAY,
             visible=False,
         )
+        # GL objects (avatar sprite, explosion shader/textures) need a current
+        # context; the pyglet Window (and its context) only exists from here on.
+        self.switch_to()
+        self.avatar = Avatar(scale=scale)
+        self.explosion = Explosion(live_key=live_key, scale=scale)
         self.set_location(*position)
         self.passthrough = False
         self.fps = FPSDisplay(window=self)
@@ -39,13 +51,18 @@ class ClippyShell(Window):
         self.mode: str | None = None
         self.dialog_pending = False
         self._bubble = ""
-        self.label = pyglet.text.Label(
+        self.label = self._make_label(w - 12)
+        if prev is not None:
+            prev.set_current()
+
+    def _make_label(self, width: int):
+        return pyglet.text.Label(
             "",
             font_name="Helvetica",
             font_size=10,
             color=(255, 255, 255, 255),
             multiline=True,
-            width=w - 12,
+            width=width,
             anchor_x="left",
             anchor_y="bottom",
         )
@@ -190,6 +207,13 @@ class ClippyShell(Window):
             self.express("greeting", hint=None)
 
     def on_draw(self):
+        # Draw under this window's OWN context. on_draw can be dispatched from
+        # pyglet's queued event list (dispatch_pending_events) at a moment when
+        # a different window's context is current (e.g. a sub-clippy's window
+        # was just shown/exposed). Without this, the label/sprite GL objects
+        # get committed under a foreign context and the next draw raises a
+        # GLException from glBufferSubData. No-op when already current.
+        self.switch_to()
         self.clear()
         pad = 20
         if not self._exploded:
@@ -211,7 +235,22 @@ class ClippyShell(Window):
         self.label.text = (
             f"{' · '.join(parts)} · {bubble} (T think / E explode / Q quit)"
         )
-        self.label.draw()
+        try:
+            self.label.draw()
+        except pyglet.gl.lib.GLException:
+            # pyglet 2.1.x text layout can overflow its vertex buffer
+            # (glBufferSubData -> GL_INVALID_VALUE) when the status label's
+            # text length swings hard while a second window's on_draw
+            # interleaves. The label is cosmetic; rebuild it and keep the loop
+            # alive instead of crashing.
+            self.label = self._make_label(self.width - 12)
+            self.label.text = (
+                f"{' · '.join(parts)} · {bubble} (T think / E explode / Q quit)"
+            )
+            try:
+                self.label.draw()
+            except pyglet.gl.lib.GLException:
+                pass  # if the fresh label also fails, skip drawing this frame
         self.fps.draw()
 
     def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
@@ -221,5 +260,8 @@ class ClippyShell(Window):
         self.move_by(dx, -dy)
 
     def update(self, dt: float):
+        # sprite.image swaps rebuild vertex lists, which needs the window's GL
+        # context current — pyglet only makes it current during on_draw.
+        self.switch_to()
         self.avatar.update(dt)
         self.explosion.update(dt)

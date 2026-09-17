@@ -320,6 +320,13 @@ class Session:
         pyglet.clock.schedule_interval(shell.update, 1 / 60)
         pyglet.clock.schedule_interval(ctrl.update, 1 / 60)
         agent.start()
+        # The worker's construction and show() both make ITS GL context current
+        # (ClippyShell.__init__ -> switch_to(), show() -> _map() -> on_expose ->
+        # on_draw). Restore the prime shell's context so any main-shell GL work
+        # after this (settled()'s express, the label redraw) runs under the main
+        # window's context — otherwise its sprite/label buffers get rebuilt under
+        # the worker's context and the next main on_draw raises a GLException.
+        self.shell.switch_to()
         return ctrl
 
     def _start_delegation(self, task: str):
