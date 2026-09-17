@@ -293,6 +293,12 @@ class MockBrain(Brain):
             }
         )
 
+    def send(self, cmd: dict):
+        """No-op host→brain RPC for the mock: just surface the command (e.g. an
+        ``extension_ui_response`` resolving a dialog card) so the round trip is
+        visible in mock mode."""
+        print(f"[mock-brain] send {json.dumps(cmd, ensure_ascii=False)}", flush=True)
+
     def stop(self):
         pass
 

@@ -6,7 +6,8 @@ description: Schedule a timed reminder or alarm. Use when the user asks to be re
 # Scheduling reminders
 
 Clippy can schedule reminders and alarms on a wall clock. End your reply with a
-`[CLIPPY::SCHEDULE] <when> | <what>` block so the host can schedule it.
+`[CLIPPY::SCHEDULE] <when> | <what>` block so the host can schedule it. (The
+`[CLIPPY::END]` close marker is optional.)
 
 Supported `<when>` forms (use one of these exactly):
 

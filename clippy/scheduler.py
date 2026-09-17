@@ -88,27 +88,44 @@ _SCHEDULE_OPEN = "[CLIPPY::SCHEDULE]"
 _NOTIFY_OPEN = "[CLIPPY::NOTIFY]"
 _DIRECTIVE_END = "[CLIPPY::END]"
 
-_SCHEDULE_RE = re.compile(
-    r"\[CLIPPY::SCHEDULE\]\s*(.*?)\s*\[CLIPPY::END\]", re.DOTALL
-)
-_NOTIFY_RE = re.compile(
-    r"\[CLIPPY::NOTIFY\]\s*(.*?)\s*\[CLIPPY::END\]", re.DOTALL
-)
+
+def _extract_directive(text: str, open_marker: str) -> tuple[int, int, int] | None:
+    """Return ``(start, body_end, clean_end)`` slice indices of a directive block.
+
+    ``body_end`` is where the directive's body ends (before the close marker);
+    ``clean_end`` is where the block is cut from the answer (includes the close
+    marker, so directives never linger in the pane). The close marker
+    ``[CLIPPY::END]`` is *optional*: models frequently omit it, so when absent
+    the block runs to the end of the directive's line.
+    """
+    start = text.find(open_marker)
+    if start == -1:
+        return None
+    body_start = start + len(open_marker)
+    close = text.find(_DIRECTIVE_END, body_start)
+    if close != -1:
+        return start, close, close + len(_DIRECTIVE_END)
+    nl = text.find("\n", body_start)
+    end = nl if nl != -1 else len(text)
+    return start, end, end
 
 
 def parse_schedule(text: str) -> tuple[str, dict | None, str | None]:
     """Return ``(clean_text, trigger, what)`` for a ``[CLIPPY::SCHEDULE]`` block.
 
     The block is ``<when> | <what>``; ``<when>`` is parsed by
-    :func:`parse_trigger`. Returns ``(text, None, None)`` without a block.
+    :func:`parse_trigger`. The ``[CLIPPY::END]`` close marker is optional (the
+    block runs to the end of its line when missing). Returns ``(text, None,
+    None)`` without a block.
     """
     if not text:
         return "", None, None
-    m = _SCHEDULE_RE.search(text)
-    if not m:
+    span = _extract_directive(text, _SCHEDULE_OPEN)
+    if span is None:
         return text, None, None
-    body = m.group(1).strip()
-    clean = (text[: m.start()] + text[m.end():]).strip()
+    start, body_end, clean_end = span
+    body = text[start + len(_SCHEDULE_OPEN):body_end].strip()
+    clean = (text[:start] + text[clean_end:]).strip()
     when, _, what = body.partition("|")
     trigger, _ = parse_trigger(when)
     if not trigger or not what.strip():
@@ -117,14 +134,18 @@ def parse_schedule(text: str) -> tuple[str, dict | None, str | None]:
 
 
 def parse_notify(text: str) -> tuple[str, str | None]:
-    """Return ``(clean_text, notify_text)`` for a ``[CLIPPY::NOTIFY]`` block."""
+    """Return ``(clean_text, notify_text)`` for a ``[CLIPPY::NOTIFY]`` block.
+
+    The ``[CLIPPY::END]`` close marker is optional (block runs to end of line).
+    """
     if not text:
         return "", None
-    m = _NOTIFY_RE.search(text)
-    if not m:
+    span = _extract_directive(text, _NOTIFY_OPEN)
+    if span is None:
         return text, None
-    body = m.group(1).strip()
-    clean = (text[: m.start()] + text[m.end():]).strip()
+    start, body_end, clean_end = span
+    body = text[start + len(_NOTIFY_OPEN):body_end].strip()
+    clean = (text[:start] + text[clean_end:]).strip()
     return clean, body or None
 
 

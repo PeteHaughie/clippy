@@ -156,6 +156,7 @@ class PiSubAgent(SubAgent):
         thinking: bool = True,
         cwd: Path | None = None,
         tools: list[str] | None = None,
+        skills: list[str] | None = None,
     ):
         self.task = task
         self.system_prompt = system_prompt
@@ -163,6 +164,7 @@ class PiSubAgent(SubAgent):
         self.thinking = thinking
         self.cwd = cwd or make_scratch_dir()
         self.tools = tools
+        self.skills = skills
         self._q: queue.Queue = queue.Queue()
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
@@ -185,6 +187,12 @@ class PiSubAgent(SubAgent):
         ]
         if self.tools:
             cmd += ["--tools", ",".join(self.tools)]
+        if self.skills:
+            # Explicit skill allowlist (mirrors PiBrain): disable auto-discovery
+            # and expose only the given Clippy skills (e.g. notify for workers).
+            cmd += ["--no-skills"]
+            for skill in self.skills:
+                cmd += ["--skill", str(skill)]
         cmd += [self.task]
         return cmd
 

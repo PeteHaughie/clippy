@@ -59,6 +59,7 @@ REMIND_CMD = "/remind"
 SCHEDULE_CMD = "/schedule"
 SKILL_CMD = "/skill"
 SKILLS_CMD = "/skills"
+TEST_CMD = "/test"
 TIME_CMD = "/time"
 WHERE_CMD = "/where"
 
@@ -83,6 +84,7 @@ HELP_TEXT = (
     "minutes stretch`, `/remind daily at 9:00 standup`)\n"
     "- `/schedule` — list scheduled tasks; `/schedule cancel <id>` removes one\n"
     "- `/time` — tell you the current time\n"
+    "- `/test card` — render a sample consent card (diagnostics)\n"
     "- `/where` — tell you where I am on screen\n\n"
     "**Skills** live in the skill folder (e.g. `memory`, `move`, `sub-clippy`) — "
     "see `/skills`. `/move` and `/delegate` are command aliases for two of "
@@ -320,6 +322,9 @@ class Session:
             arg = stripped[len(SKILL_CMD):].strip()
             name, _, request = arg.partition(" ")
             self._invoke_skill(name.strip(), request.strip())
+            return
+        if low.startswith(TEST_CMD):
+            self._run_test(stripped[len(TEST_CMD):].strip())
             return
         if low.startswith(TIME_CMD):
             self.pane.add_message("clippy", humanize())
@@ -687,6 +692,45 @@ class Session:
             streaming_behavior="followUp",
         )
 
+    # ------------------------------------------------------- diagnostics
+
+    _TEST_CARD_PAYLOADS = {
+        "confirm": {"title": "Test consent card", "message": "Allow the test tool call?"},
+        "select": {"title": "Test select", "message": "Pick an option:", "options": ["one", "two", "three"]},
+        "input": {"title": "Test input", "message": "Enter a value:", "placeholder": "type here…", "default": "hello"},
+        "editor": {"title": "Test editor", "message": "Edit the value:", "default": "line one\nline two"},
+        "notify": {"title": "Test notify", "message": "This is a test notification card."},
+    }
+
+    def _run_test(self, arg: str):
+        """Diagnostics: ``/test card [method]`` renders a sample dialog card via
+        the real ``extension_ui_request → pane.ui_request`` path, so the
+        ephemeral UI graph can be exercised from sandbox/mock mode."""
+        sub, _, rest = arg.partition(" ")
+        sub = (sub or "card").lower()
+        if sub == "card":
+            method = (rest or "confirm").strip().lower()
+            if method not in self._TEST_CARD_PAYLOADS:
+                self.pane.add_message(
+                    "clippy",
+                    "`/test card` methods: "
+                    + ", ".join(f"`{m}`" for m in self._TEST_CARD_PAYLOADS)
+                    + ".",
+                )
+                return
+            from .model import UiRequest
+
+            ev = UiRequest(
+                id="test-card",
+                method=method,
+                payload=self._TEST_CARD_PAYLOADS[method],
+            )
+            self.pane.ui_request(ev)  # exact production path → __uiRequest → card
+            return
+        self.pane.add_message(
+            "clippy", "Diagnostics: try `/test card [confirm|select|input|editor|notify]`."
+        )
+
     def ui_response(self, rid, payload: dict):
         print(
             f"[clippy] ui_response {rid} "
@@ -792,13 +836,20 @@ class Session:
 
     def _on_sub_done(self, failed: bool, report: str):
         self.shell.set_bubble("(sub-clippy finished — relaying)")
+        # A delegated worker may post its own OS notification via a
+        # [CLIPPY::NOTIFY] directive — strip it from the report and surface it.
+        report, notify_text = parse_notify(report)
+        if notify_text:
+            notify("Sub-clippy", notify_text)
+        else:
+            # No worker-authored notification: post the generic completion ping.
+            notify(
+                "Sub-clippy finished",
+                ("Finished with an error." if failed else "Done.")
+                + (f" {report[:120]}" if report else ""),
+            )
         if report:
             self.pane.add_message("clippy", f"Sub-clippy reported: {report}")
-        # Surface completion as an OS notification (user may not be watching).
-        notify(
-            "Sub-clippy finished",
-            ("Finished with an error." if failed else "Done.") + (f" {report[:120]}" if report else ""),
-        )
         self.brain.steer(
             "The delegated sub-clippy finished"
             f"{' with an error' if failed else ''}. "
@@ -824,8 +875,17 @@ class Session:
         return True
 
     def _spawn_worker(self, task: str, tools=None, on_complete=None) -> SubClippyController:
+        from .roots import SKILLS_DIR
+
         if self.real or pi_ready():
-            agent = PiSubAgent(task=task, model=self.model, tools=tools)
+            # Workers learn the notify protocol (emit [CLIPPY::NOTIFY]) so a
+            # delegated task can surface its own OS notification.
+            agent = PiSubAgent(
+                task=task,
+                model=self.model,
+                tools=tools,
+                skills=[str(SKILLS_DIR / "notify")],
+            )
             print(f"[clippy] delegating to PI sub-agent ({self.model})")
         else:
             agent = MockSubAgent(task=task)

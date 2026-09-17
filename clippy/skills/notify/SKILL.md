@@ -7,7 +7,7 @@ description: Surface a desktop notification right now. Use when something import
 
 Clippy can post an OS-level desktop notification immediately. End your reply
 with a `[CLIPPY::NOTIFY] <text>` block when you want to surface something the
-user may miss in the pane.
+user may miss in the pane. (The `[CLIPPY::END]` close marker is optional.)
 
 Example:
 
