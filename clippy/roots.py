@@ -27,6 +27,7 @@ LOGS_DIR = CLIPPY_ROOT / "logs"
 MEMORY_DIR = CLIPPY_ROOT / "memory"
 MEMORY_INDEX = MEMORY_DIR / "INDEX.md"
 USER_CONFIG = CLIPPY_ROOT / "config.json"
+SCHEDULER_FILE = CLIPPY_ROOT / "scheduler.jsonl"
 
 #: Repo-internal locations (read-only; independent of CLIPPY_HOME).
 PACKAGE_DIR = Path(__file__).resolve().parent

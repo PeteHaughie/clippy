@@ -327,6 +327,33 @@ PRIME_CONVERSATION: dict = {
     ],
 }
 
+#: Lifecycle of a scheduled task (time-and-scheduling, graph/FSM scheduler).
+#: The wall-clock tick is the only "cron": a host loop calls ``wake`` on tasks
+#: whose ``wake_at`` has passed (see :class:`clippy.scheduler.TaskScheduler`).
+#: ``on_enter: "fire"`` runs the task's action when it becomes due; recurring
+#: tasks rearm back to ``pending`` (recomputing ``wake_at``), one-shots go to
+#: ``done``.
+SCHEDULED_TASK: dict = {
+    "initial": "pending",
+    "states": {
+        "pending": {
+            "timeout": "until_due",
+            "on_timeout": "wake",
+        },
+        "due": {"on_enter": "fire"},
+        "fired": {},
+        "cancelled": {},
+        "done": {},
+    },
+    "transitions": [
+        {"src": "pending", "trigger": "wake", "to": "due"},
+        {"src": "due", "trigger": "fire_done", "to": "fired"},
+        {"src": "fired", "trigger": "rearm", "to": "pending"},   # recurring
+        {"src": "fired", "trigger": "complete", "to": "done"},   # one-shot
+        {"src": "*", "trigger": "cancel", "to": "cancelled"},
+    ],
+}
+
 # ------------------------------------------------------------ session graph
 
 #: The canonical topology (phase 3). Wired by :mod:`clippy.session`; validated

@@ -36,6 +36,8 @@ from .subagent import (
     parse_move,
     pi_ready,
 )
+from .scheduler import parse_trigger
+from .timeutil import humanize, time_header
 
 #: Read/search-only tool allowlist for a sandboxed conversation (005).
 SANDBOX_TOOLS = ["read", "grep", "find", "ls"]
@@ -50,8 +52,11 @@ GATE_EXT = str(
 HELP_CMD = "/help"
 MOOD_CMD = "/mood"
 MOVE_CMD = "/move"
+REMIND_CMD = "/remind"
+SCHEDULE_CMD = "/schedule"
 SKILL_CMD = "/skill"
 SKILLS_CMD = "/skills"
+TIME_CMD = "/time"
 WHERE_CMD = "/where"
 
 #: Shown by /help (markdown — the pane renders clippy bubbles as markdown).
@@ -70,6 +75,10 @@ HELP_TEXT = (
     "- `/move <spot>` or `/move <x> <y>` — move me on screen (spots: "
     "top-left / top-right / bottom-left / bottom-right / center / left / "
     "right / top / bottom)\n"
+    "- `/remind <when> <what>` — schedule a reminder (e.g. `/remind in 5 "
+    "minutes stretch`, `/remind daily at 9:00 standup`)\n"
+    "- `/schedule` — list scheduled tasks; `/schedule cancel <id>` removes one\n"
+    "- `/time` — tell you the current time\n"
     "- `/where` — tell you where I am on screen\n\n"
     "**Skills** live in the skill folder (e.g. `memory`, `move`, `sub-clippy`) — "
     "see `/skills`. `/move` and `/delegate` are command aliases for two of "
@@ -131,6 +140,13 @@ class Session:
         # so pyglet/WKWebView are only ever re-entered from the main thread
         # (re-spawning a brain from a background thread aborts the app).
         self._pending: queue.Queue = queue.Queue()
+        #: Wall-clock graph/FSM scheduler (time-and-scheduling). Runs on the
+        #: existing loop; scheduled brain actions are queued and fired when the
+        #: prime is idle (no heartbeat — see clippy/scheduler.py).
+        from .scheduler import TaskScheduler
+
+        self.scheduler = TaskScheduler(dispatch=self._scheduled_action)
+        self._scheduled_brain_q: queue.Queue = queue.Queue()
         pyglet.clock.schedule_interval(self.update, 1 / 60)
         self._spawn_prime()
         self._wire()
@@ -186,12 +202,15 @@ class Session:
         self._pending.put(("pane_resize", data))
 
     def update(self, dt):
-        """Run queued JS→Python callbacks on the main thread (one per frame)."""
+        """Run queued JS→Python callbacks + scheduler ticks on the main thread."""
+        # Advance the wall-clock scheduler (fires due tasks; brain actions queue
+        # until idle).
+        self.scheduler.tick()
         while True:
             try:
                 job = self._pending.get_nowait()
             except queue.Empty:
-                return
+                break
             kind = job[0]
             if kind == "chat":
                 if self._prime_log is not None:
@@ -206,6 +225,28 @@ class Session:
                 self.pane._on_pane_move(job[1])
             elif kind == "pane_resize":
                 self.pane._on_pane_resize(job[1])
+        # Fire queued scheduled-brain actions only when the prime is idle (its
+        # PRIME_CONVERSATION SM is back to "idle"), so we never interrupt a
+        # turn and never burn heartbeat tokens.
+        if self._scheduled_brain_q.qsize() and self._prime_idle():
+            self.brain.prompt(self._scheduled_brain_q.get_nowait(), streaming_behavior="followUp")
+
+    def _prime_idle(self) -> bool:
+        sm = getattr(self.prime_controller, "sm", None)
+        return sm is None or sm.is_in("idle")
+
+    def _scheduled_action(self, action: dict):
+        """Dispatch a scheduled task's action (host effect or queued brain)."""
+        kind = action.get("type")
+        if kind == "pane":
+            self.pane.add_message("clippy", action.get("text", ""))
+        elif kind == "mood":
+            self.shell.express(action.get("mood", "greeting"), hint=action.get("hint"), force=True)
+        elif kind == "brain":
+            # Queue; drained in update() when the prime is idle.
+            self._scheduled_brain_q.put(action.get("text", ""))
+        else:
+            print(f"[clippy] unknown scheduled action {action!r}", flush=True)
 
     def dump(self) -> str:
         return self.graph.dump()
@@ -269,6 +310,15 @@ class Session:
             name, _, request = arg.partition(" ")
             self._invoke_skill(name.strip(), request.strip())
             return
+        if low.startswith(TIME_CMD):
+            self.pane.add_message("clippy", humanize())
+            return
+        if low.startswith(REMIND_CMD):
+            self._run_remind(stripped[len(REMIND_CMD):].strip())
+            return
+        if low.startswith(SCHEDULE_CMD):
+            self._run_schedule(stripped[len(SCHEDULE_CMD):].strip())
+            return
         if low.startswith(DELEGATE_CMD):
             task = stripped[len(DELEGATE_CMD):].strip()
             if not task:
@@ -289,7 +339,13 @@ class Session:
                 "what I can do.",
             )
             return
-        self.brain.prompt(text, streaming_behavior="followUp")
+        # Brain-bound: inject a compact host-computed time header so Clippy is
+        # time-aware without a heartbeat (the model can't run `date` in sandbox),
+        # plus a short pointer to the next scheduled task.
+        self.brain.prompt(
+            f"{time_header()} Scheduled: {self.scheduler.brief()}\n\n{text}",
+            streaming_behavior="followUp",
+        )
 
     # ------------------------------------------------------------- movement
 
@@ -322,6 +378,51 @@ class Session:
             "`/move <spot>` (top-left/top-right/bottom-left/bottom-right/"
             "center/left/right/top/bottom) or `/move <x> <y>`.",
         )
+
+    # ----------------------------------------------------------- time/tasks
+
+    def _run_remind(self, arg: str):
+        """Schedule a reminder: ``/remind <when> <what>`` (wall-clock,
+        JSONL-persisted — survives restarts)."""
+        trigger, what = parse_trigger(arg)
+        if not trigger or not what:
+            self.pane.add_message(
+                "clippy",
+                "I can schedule: `/remind in 5 minutes <what>`, "
+                "`/remind at 14:30 <what>`, `/remind every 2 hours <what>`, or "
+                "`/remind daily at 9:00 <what>`.",
+            )
+            return
+        task = self.scheduler.add(trigger, {"type": "pane", "text": what})
+        from .timeutil import format_wallclock
+
+        self.pane.add_message(
+            "clippy",
+            f"Reminder set for **{format_wallclock(task.wake_at)}** "
+            f"(`{task.id}`): {what}",
+        )
+
+    def _run_schedule(self, arg: str):
+        """List or cancel scheduled tasks: ``/schedule``, ``/schedule cancel <id>``."""
+        rest = arg.strip()
+        if rest.lower().startswith("cancel"):
+            task_id = rest.split(None, 1)[1].strip() if " " in rest else ""
+            if task_id and self.scheduler.cancel(task_id):
+                self.pane.add_message("clippy", f"Cancelled task `{task_id}`.")
+            else:
+                self.pane.add_message("clippy", f"No scheduled task `{task_id}`.")
+            return
+        tasks = self.scheduler.list()
+        if not tasks:
+            self.pane.add_message("clippy", "Nothing scheduled.")
+            return
+        from .timeutil import format_wallclock
+
+        lines = [f"I have {len(tasks)} scheduled task(s):"]
+        for d in tasks:
+            what = d["action"].get("text") or d["action"].get("mood") or d["action"].get("type")
+            lines.append(f"- `{d['id']}` — **{format_wallclock(d['wake_at'])}** · {what}")
+        self.pane.add_message("clippy", "\n".join(lines))
 
     # ---------------------------------------------------------------- moods
 
