@@ -14,6 +14,7 @@ prompt — which the host queues and fires when the prime is idle (no heartbeat)
 
 import datetime
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -79,6 +80,52 @@ def parse_trigger(text: str) -> tuple[dict, str]:
     if m:
         return {"type": "at", "hour": int(m.group(1)), "minute": int(m.group(2))}, m.group(3).strip()
     return {}, ""
+
+
+#: Directive markers (same pattern as [CLIPPY::DELEGATE]…[CLIPPY::END]): the
+#: host strips the block from the answer and schedules/notifies deterministically.
+_SCHEDULE_OPEN = "[CLIPPY::SCHEDULE]"
+_NOTIFY_OPEN = "[CLIPPY::NOTIFY]"
+_DIRECTIVE_END = "[CLIPPY::END]"
+
+_SCHEDULE_RE = re.compile(
+    r"\[CLIPPY::SCHEDULE\]\s*(.*?)\s*\[CLIPPY::END\]", re.DOTALL
+)
+_NOTIFY_RE = re.compile(
+    r"\[CLIPPY::NOTIFY\]\s*(.*?)\s*\[CLIPPY::END\]", re.DOTALL
+)
+
+
+def parse_schedule(text: str) -> tuple[str, dict | None, str | None]:
+    """Return ``(clean_text, trigger, what)`` for a ``[CLIPPY::SCHEDULE]`` block.
+
+    The block is ``<when> | <what>``; ``<when>`` is parsed by
+    :func:`parse_trigger`. Returns ``(text, None, None)`` without a block.
+    """
+    if not text:
+        return "", None, None
+    m = _SCHEDULE_RE.search(text)
+    if not m:
+        return text, None, None
+    body = m.group(1).strip()
+    clean = (text[: m.start()] + text[m.end():]).strip()
+    when, _, what = body.partition("|")
+    trigger, _ = parse_trigger(when)
+    if not trigger or not what.strip():
+        return clean, None, None
+    return clean, trigger, what.strip()
+
+
+def parse_notify(text: str) -> tuple[str, str | None]:
+    """Return ``(clean_text, notify_text)`` for a ``[CLIPPY::NOTIFY]`` block."""
+    if not text:
+        return "", None
+    m = _NOTIFY_RE.search(text)
+    if not m:
+        return text, None
+    body = m.group(1).strip()
+    clean = (text[: m.start()] + text[m.end():]).strip()
+    return clean, body or None
 
 
 def _next_wake(trigger: dict, now: datetime.datetime) -> datetime.datetime:
@@ -205,18 +252,33 @@ class TaskScheduler:
     # ------------------------------------------------------------- persistence
 
     def _save(self):
+        # Atomic write: temp file in the same dir + os.replace so a crash can
+        # never leave a truncated store. Prune done/cancelled rows so throwaway
+        # tasks don't accumulate.
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as fh:
-            for task in self._tasks.values():
-                rec = {
+        rows = []
+        for task in self._tasks.values():
+            state = self._sms[task.id].current
+            if state in ("done", "cancelled"):
+                continue
+            rows.append(
+                {
                     "id": task.id,
                     "trigger": task.trigger,
                     "action": task.action,
                     "wake_at": _to_iso(task.wake_at),
                     "created_at": _to_iso(task.created_at),
-                    "state": self._sms[task.id].current,
+                    "state": state,
                 }
+            )
+        tmp = self.path.with_suffix(".jsonl.tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            for rec in rows:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            fh.flush()
+        import os
+
+        os.replace(tmp, self.path)
 
     def _load(self):
         if not self.path.exists():

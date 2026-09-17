@@ -36,7 +36,8 @@ from .subagent import (
     parse_move,
     pi_ready,
 )
-from .scheduler import parse_trigger
+from .notify import notify
+from .scheduler import parse_notify, parse_schedule, parse_trigger
 from .timeutil import humanize, time_header
 
 #: Read/search-only tool allowlist for a sandboxed conversation (005).
@@ -240,6 +241,10 @@ class Session:
         kind = action.get("type")
         if kind == "pane":
             self.pane.add_message("clippy", action.get("text", ""))
+        elif kind == "notify":
+            # OS notification; fall back to a pane message when no notifier.
+            if not notify(action.get("title", "Clippy"), action.get("text", "")):
+                self.pane.add_message("clippy", action.get("text", ""))
         elif kind == "mood":
             self.shell.express(action.get("mood", "greeting"), hint=action.get("hint"), force=True)
         elif kind == "brain":
@@ -393,7 +398,7 @@ class Session:
                 "`/remind daily at 9:00 <what>`.",
             )
             return
-        task = self.scheduler.add(trigger, {"type": "pane", "text": what})
+        task = self.scheduler.add(trigger, {"type": "notify", "title": "Reminder", "text": what})
         from .timeutil import format_wallclock
 
         self.pane.add_message(
@@ -548,9 +553,13 @@ class Session:
     #: listing so the dual nature (skill folder + deterministic command) is
     #: explicit rather than confusing.
     SKILL_ALIASES = {"move": "/move", "sub-clippy": "/delegate"}
-    #: Backing note for skills handled by a background process rather than a
-    #: command alias (memory → the memory curator).
-    SKILL_BACKING = {"memory": "background curator"}
+    #: Backing note for skills handled by a background process or the host
+    #: rather than a command alias.
+    SKILL_BACKING = {
+        "memory": "background curator",
+        "schedule": "host schedules a task",
+        "notify": "host posts an OS notification",
+    }
 
     def _list_skills(self):
         from .memory import list_skills
@@ -628,6 +637,27 @@ class Session:
                 "clippy", "Handing that to my memory curator."
             )
             return
+        if skill_name == "schedule":
+            # Reuse the /remind path: `<when> <what>` → wall-clock task + notify.
+            if not request:
+                self.pane.add_message(
+                    "clippy",
+                    f"{hint} — e.g. `/skill schedule in 5 minutes take a break`.",
+                )
+                return
+            self._run_remind(request)
+            return
+        if skill_name == "notify":
+            if not request:
+                self.pane.add_message(
+                    "clippy", f"{hint} — e.g. `/skill notify Search finished`."
+                )
+                return
+            if not notify("Clippy", request):
+                self.pane.add_message("clippy", request)
+            else:
+                self.pane.add_message("clippy", "Notification sent.")
+            return
 
         # Everything else (user-allowlisted skills) is a model tool: route the
         # request to the brain so it invokes the skill and streams the result
@@ -660,28 +690,45 @@ class Session:
         self.prompt(f"Mode is now {self.mode}.")
 
     def _on_answer(self, text: str):
-        """Prime's final message: surface it in the pane, and if it carries a
-        [CLIPPY::DELEGATE] directive (the sub-clippy composition skill), spawn
-        a sandboxed worker for the task and steer its report back in. A
-        [CLIPPY::MOVE] directive moves Clippy on screen (the move skill)."""
+        """Prime's final message: surface it in the pane, and handle any
+        directives: [CLIPPY::DELEGATE] spawns a worker, [CLIPPY::MOVE] moves
+        Clippy, [CLIPPY::SCHEDULE] schedules a wall-clock notify task, and
+        [CLIPPY::NOTIFY] posts an OS notification."""
         print(f"[clippy] answer {len(text)}b", flush=True)
         clean, task = parse_delegation(text)
         clean, move = parse_move(clean)
+        clean, trigger, schedule_what = parse_schedule(clean)
+        clean, notify_text = parse_notify(clean)
         if task:
             self.shell.set_bubble("(handing off to a sub-clippy…)")
             self.delegate(task, tools=SANDBOX_TOOLS, on_complete=self._on_sub_done)
         if move:
             self._run_move(move)
+        if trigger and schedule_what:
+            from .timeutil import format_wallclock
+
+            sched = self.scheduler.add(
+                trigger, {"type": "notify", "title": "Reminder", "text": schedule_what}
+            )
+            self.pane.add_message(
+                "clippy",
+                f"Reminder set for **{format_wallclock(sched.wake_at)}** "
+                f"(`{sched.id}`): {schedule_what}",
+            )
+        if notify_text:
+            if not notify("Clippy", notify_text):
+                self.pane.add_message("clippy", notify_text)
         # The reasoning-stream bubble already shows the live answer; close it
         # with the final, directive-stripped text (replaces anything that
-        # streamed in, so [CLIPPY::DELEGATE]/[CLIPPY::MOVE] never linger).
+        # streamed in, so [CLIPPY::DELEGATE]/[CLIPPY::MOVE]/[CLIPPY::SCHEDULE]/
+        # [CLIPPY::NOTIFY] never linger).
         # stream_end("") on a reply that was entirely directives just closes
         # the bubble.
         if clean:
             self.pane.stream_end(clean)
-        elif task:
+        elif task or (trigger and schedule_what):
             self.pane.stream_end(
-                "I've handed that to a sub-clippy — report back shortly."
+                "I've handled that for you."
             )
         else:
             self.pane.stream_end("")
@@ -733,6 +780,11 @@ class Session:
         self.shell.set_bubble("(sub-clippy finished — relaying)")
         if report:
             self.pane.add_message("clippy", f"Sub-clippy reported: {report}")
+        # Surface completion as an OS notification (user may not be watching).
+        notify(
+            "Sub-clippy finished",
+            ("Finished with an error." if failed else "Done.") + (f" {report[:120]}" if report else ""),
+        )
         self.brain.steer(
             "The delegated sub-clippy finished"
             f"{' with an error' if failed else ''}. "
