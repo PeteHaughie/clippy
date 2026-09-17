@@ -50,12 +50,17 @@ GATE_EXT = str(
 HELP_CMD = "/help"
 MOOD_CMD = "/mood"
 MOVE_CMD = "/move"
+SKILL_CMD = "/skill"
+SKILLS_CMD = "/skills"
 WHERE_CMD = "/where"
 
 #: Shown by /help (markdown — the pane renders clippy bubbles as markdown).
+#: Commands are the built-in API (host-intercepted, deterministic); skills are
+#: the skill folder / model tools — see ADR-0001.
 HELP_TEXT = (
-    "Here's what I can do:\n"
+    "Here's what I can do — **commands** (built-in API):\n"
     "- `/help` — show this list\n"
+    "- `/skills` — list my skills; `/skill <name> [request]` invokes one\n"
     "- `/mood` — list my moods; `/mood <name>` plays any of the catalog's "
     "animations directly (e.g. `/mood greet`, `/mood working build`, "
     "`/mood GestureRight`), and `/mood idle <animation>` pins a specific "
@@ -66,6 +71,9 @@ HELP_TEXT = (
     "top-left / top-right / bottom-left / bottom-right / center / left / "
     "right / top / bottom)\n"
     "- `/where` — tell you where I am on screen\n\n"
+    "**Skills** live in the skill folder (e.g. `memory`, `move`, `sub-clippy`) — "
+    "see `/skills`. `/move` and `/delegate` are command aliases for two of "
+    "them.\n"
     "Anything else, just chat! You can also press **Tab** in the pane to "
     "toggle between sandbox (read-only) and build (mutation-gated) mode."
 )
@@ -238,6 +246,16 @@ class Session:
         if low.startswith(MOVE_CMD):
             self._run_move(self._command_move_spec(stripped[len(MOVE_CMD):].strip()))
             return
+        # /skills must be matched before /skill ("/skills" also starts with
+        # "/skill"); both are listed here so the folder is the source of truth.
+        if low.startswith(SKILLS_CMD):
+            self._list_skills()
+            return
+        if low.startswith(SKILL_CMD):
+            arg = stripped[len(SKILL_CMD):].strip()
+            name, _, request = arg.partition(" ")
+            self._invoke_skill(name.strip(), request.strip())
+            return
         if low.startswith(DELEGATE_CMD):
             task = stripped[len(DELEGATE_CMD):].strip()
             if not task:
@@ -404,6 +422,90 @@ class Session:
             "clippy",
             f"`{mood}` isn't a mood or animation I know — try `/mood` for the "
             "full list.",
+        )
+
+    # ---------------------------------------------------------------- skills
+    # Skills live in the skill folder (clippy/skills or skills.allow) and are
+    # model-invocable tools. /skills lists them; /skill <name> invokes one —
+    # deterministically via the built-in API for host-backed skills (move,
+    # sub-clippy), brain-routed for the rest. See ADR-0001.
+
+    #: Built-in command aliases for host-backed skills, shown in the /skills
+    #: listing so the dual nature (skill folder + deterministic command) is
+    #: explicit rather than confusing.
+    SKILL_ALIASES = {"move": "/move", "sub-clippy": "/delegate"}
+
+    def _list_skills(self):
+        from .memory import list_skills
+
+        skills = list_skills()
+        if not skills:
+            self.pane.add_message(
+                "clippy", "I don't have any skills enabled right now."
+            )
+            return
+        lines = [f"I have {len(skills)} skill(s):"]
+        for s in skills:
+            line = f"- **{s['name']}**"
+            if s["description"]:
+                line += f" — {s['description']}"
+            alias = self.SKILL_ALIASES.get(s["name"])
+            if alias:
+                line += f" *(alias: `{alias}`)*"
+            lines.append(line)
+        lines.append("\n`/skill <name> [request]` invokes one (commands like "
+                     "`/move` and `/delegate` are the built-in API — see `/help`).")
+        self.pane.add_message("clippy", "\n".join(lines))
+
+    def _invoke_skill(self, name: str, request: str):
+        from .memory import list_skills
+
+        skills = {s["name"].lower(): s for s in list_skills()}
+        key = name.lower()
+        if not name or key not in skills:
+            known = ", ".join(f"`{s['name']}`" for s in list_skills())
+            self.pane.add_message(
+                "clippy",
+                f"`{name or '<name>'}` isn't a skill I have — try `/skills` "
+                f"(available: {known}).",
+            )
+            return
+        skill = skills[key]
+        skill_name = skill["name"]
+        hint = skill["description"] or f"The `{skill_name}` skill"
+
+        # Host-backed skills are invoked deterministically through the built-in
+        # API (they need a concrete request to act on).
+        if skill_name == "move":
+            if not request:
+                self.pane.add_message(
+                    "clippy", f"{hint} — e.g. `/skill move top-left`."
+                )
+                return
+            self._run_move(self._command_move_spec(request))
+            return
+        if skill_name == "sub-clippy":
+            if not request:
+                self.pane.add_message(
+                    "clippy",
+                    f"{hint} — e.g. `/skill sub-clippy count the markdown files`.",
+                )
+                return
+            self._start_delegation(request)
+            return
+
+        # Everything else (memory, user-allowlisted skills) is a model tool:
+        # route the request to the brain so it invokes the skill and streams
+        # the result into the pane.
+        if not request:
+            self.pane.add_message(
+                "clippy",
+                f"{hint} — add a request, e.g. `/skill {skill_name} <what to do>`.",
+            )
+            return
+        self.brain.prompt(
+            f"Use the '{skill_name}' skill to handle this request: {request}",
+            streaming_behavior="followUp",
         )
 
     def ui_response(self, rid, payload: dict):

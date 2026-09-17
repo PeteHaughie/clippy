@@ -47,3 +47,38 @@ def resolve_skill_paths() -> list[str]:
         if skill_dir.exists() and str(skill_dir) not in paths:
             paths.insert(0, str(skill_dir))
     return paths
+
+
+def _parse_skill_frontmatter(md: Path) -> tuple[str, str]:
+    """Return ``(name, description)`` from a SKILL.md's YAML frontmatter block.
+
+    Falls back to the directory name / empty description when the file is
+    missing or has no ``---`` frontmatter block.
+    """
+    name = md.parent.name
+    description = ""
+    if not md.exists():
+        return name, description
+    parts = md.read_text(encoding="utf-8").split("---", 2)
+    if len(parts) < 2:
+        return name, description
+    for line in parts[1].splitlines():
+        stripped = line.strip()
+        if stripped.startswith("name:"):
+            name = stripped.split(":", 1)[1].strip().strip("'\"") or name
+        elif stripped.startswith("description:"):
+            description = stripped.split(":", 1)[1].strip().strip("'\"")
+    return name, description
+
+
+def list_skills() -> list[dict]:
+    """Name + description for every exposed skill (``resolve_skill_paths()``),
+    parsed from each ``SKILL.md``'s YAML frontmatter. Sorted by name."""
+    out = []
+    for path in resolve_skill_paths():
+        skill_dir = Path(path)
+        name, description = _parse_skill_frontmatter(skill_dir / "SKILL.md")
+        out.append(
+            {"name": name, "description": description, "path": str(skill_dir)}
+        )
+    return sorted(out, key=lambda s: s["name"])
