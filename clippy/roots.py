@@ -23,6 +23,7 @@ def _default_root() -> Path:
 
 CLIPPY_ROOT = _default_root()
 SCRATCH_ROOT = CLIPPY_ROOT / "scratch"
+LOGS_DIR = CLIPPY_ROOT / "logs"
 MEMORY_DIR = CLIPPY_ROOT / "memory"
 MEMORY_INDEX = MEMORY_DIR / "INDEX.md"
 USER_CONFIG = CLIPPY_ROOT / "config.json"

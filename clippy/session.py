@@ -14,6 +14,7 @@ set at spawn only (research/pi-community-deep-dive.md §3).
 
 from __future__ import annotations
 
+import datetime
 import queue
 from pathlib import Path
 
@@ -82,6 +83,19 @@ class Session:
 
         self.graph = build_session_graph()
         self._validate_topology()
+
+        #: Per-conversation JSONL chat log (gated by config logging.enabled).
+        #: The prime gets one file for its whole run; each sub-clippy gets its
+        #: own file (see _spawn_worker). Everything flushes per line, so logs
+        #: survive crashes/hangs.
+        cfg = self.shell.avatar.moods.config
+        self.logging_enabled = bool((cfg.get("logging") or {}).get("enabled", True))
+        self._prime_log = None
+        if self.logging_enabled:
+            from .chatlog import ChatLogger, make_chat_log
+
+            self._prime_log = ChatLogger(make_chat_log("prime"), label="prime")
+            self._prime_log.marker("chat_start")
 
         self.pane = Pane(shell)
         shell.pane = self.pane
@@ -160,6 +174,8 @@ class Session:
                 return
             kind = job[0]
             if kind == "chat":
+                if self._prime_log is not None:
+                    self._prime_log.user(job[1])
                 self.prompt(job[1])
             elif kind == "ui_response":
                 self.ui_response(job[1], job[2])
@@ -196,6 +212,9 @@ class Session:
             print("[clippy] Pi not ready — prime brain on mock")
         self.brain = brain
         self.prime_controller = PrimeController(self.shell, brain)
+        # Keep the same per-run chat log attached across Tab-toggle re-spawns.
+        if self._prime_log is not None:
+            self.prime_controller.router.logger = self._prime_log
         self._bind_prime()
         self.shell.mode = self.mode
         self.shell.dialog_pending = False
@@ -475,6 +494,14 @@ class Session:
         sx, sy = px + pw + 12, py
         shell = ClippyShell(scale=sub_scale, position=(sx, sy))
         ctrl = SubClippyController(shell, agent, on_complete=on_complete)
+        # Each delegation gets its own chat transcript.
+        if self.logging_enabled:
+            from .chatlog import ChatLogger, make_chat_log
+
+            stamp = datetime.datetime.now().strftime("%H%M%S")
+            worker_log = ChatLogger(make_chat_log(f"subclippy-{stamp}"), label="subclippy")
+            worker_log.marker("task", text=task, model=self.model)
+            ctrl.router.logger = worker_log
         shell.show()
         # On X11/XWayland the constructor's set_location runs before the window
         # is mapped and the WM ignores it, so both shells land at the same spot

@@ -65,5 +65,9 @@
   "skills": {
     "allow": [],
     "comment": "Editable allowlist of skill paths (agent-skill SKILL.md dirs). Empty = no explicit skills exposed. Pi auto-discovery is disabled when a non-empty allowlist is set."
+  },
+  "logging": {
+    "enabled": true,
+    "comment": "Write a timestamped JSONL chat transcript per conversation (prime + each sub-clippy) under ~/.clippy/logs. Set false to disable."
   }
 }

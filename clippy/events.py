@@ -226,6 +226,11 @@ class AgentEventRouter:
         self.sink = sink
         self.thinking = ""
         self.text = ""
+        #: Optional :class:`clippy.chatlog.ChatLogger`. When set, the router
+        #: mirrors the semantic events to it (raw thinking/stream deltas, tool
+        #: calls/results, final response) so one hook covers the prime AND every
+        #: sub-clippy conversation.
+        self.logger = None
         self._handlers = {
             "agent_start": self._on_agent_start,
             "turn_start": self._noop,
@@ -262,11 +267,15 @@ class AgentEventRouter:
         if ev.role == "assistant":
             self.thinking = ""
             self.text = ""
+            if self.logger:
+                self.logger.marker("turn_start")
             self.sink.turn_started()
             self.sink.stream_start()
 
     def _on_thinking_delta(self, ev: ThinkingDelta):
         self.thinking += ev.delta
+        if self.logger:
+            self.logger.thinking(ev.delta)
         self.sink.thinking(self.thinking.strip()[-self.BUBBLE_LEN:] or "(thinking)")
         self.sink.stream_thinking(self.thinking)
 
@@ -279,13 +288,19 @@ class AgentEventRouter:
     def _on_text_delta(self, ev: TextDelta):
         delta = strip_function_xml(ev.delta)
         self.text += delta
+        if self.logger:
+            self.logger.stream(delta)
         self.sink.text(self.text.strip()[-self.BUBBLE_LEN:] or "(answering)")
         self.sink.stream_text(self.text)
 
     def _on_tool_start(self, ev):
+        if self.logger:
+            self.logger.tool_call(ev.tool, getattr(ev, "args", None))
         self.sink.tool_start(ev.tool)
 
     def _on_tool_end(self, ev: ToolExecEnd):
+        if self.logger:
+            self.logger.tool_result(ev.tool, ev.result_text, ev.is_error)
         self.sink.tool_end(ev)
 
     def _on_message_end(self, ev: MessageEnd):
@@ -296,6 +311,8 @@ class AgentEventRouter:
         if ev.role and ev.role != "assistant":
             return
         text = strip_function_xml(ev.text) or strip_function_xml(self.text.strip())
+        if self.logger:
+            self.logger.response(ev.stop_reason, text)
         self.sink.message_end(ev.stop_reason, text)
 
     def _on_agent_end(self, ev: AgentEnd):
@@ -315,6 +332,8 @@ class AgentEventRouter:
         self.sink.exit(ev.code)
 
     def _on_unknown(self, ev: Unknown):
+        if self.logger:
+            self.logger.unknown(ev.raw)
         self.sink.unparseable(ev.raw)
 
     def _on_agent_start(self, ev):
