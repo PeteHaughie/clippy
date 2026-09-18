@@ -1,7 +1,7 @@
 {
   "idle": {
     "settle": "RestPose",
-    "rotate": true,
+    "rotate": false,
     "initial_delay_sec": 0,
     "rotate_interval_sec": 45,
     "pool": [
@@ -64,7 +64,7 @@
   },
   "skills": {
     "allow": [],
-    "comment": "Editable allowlist of skill paths (agent-skill SKILL.md dirs). Empty = no explicit skills exposed. Pi auto-discovery is disabled when a non-empty allowlist is set."
+    "comment": "Editable allowlist of skill paths (agent-skill SKILL.md dirs, e.g. ~/.agents/skills/<name>); user config ~/.clippy/config.json deep-merges over this. Empty = no explicit skills exposed. Pi auto-discovery is disabled when a non-empty allowlist is set. Allowlisted skills are model tools — full use (web/write/bash) requires build mode; sandbox (read-only tools) limits them to reading."
   },
   "logging": {
     "enabled": true,
