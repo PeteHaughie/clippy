@@ -855,7 +855,22 @@ class Session:
 
     def _on_sub_done(self, failed: bool, report: str):
         self.shell.set_bubble("(sub-clippy finished — relaying)")
-        # A delegated worker may post its own OS notification via a
+        # A delegated worker may schedule a reminder via a [CLIPPY::SCHEDULE]
+        # directive — strip it from the report and create a wall-clock notify
+        # task (same bounded triggers + action as the prime's schedule path).
+        report, trigger, schedule_what = parse_schedule(report)
+        if trigger and schedule_what:
+            from .timeutil import format_wallclock
+
+            sched = self.scheduler.add(
+                trigger, {"type": "notify", "title": "Reminder", "text": schedule_what}
+            )
+            self.pane.add_message(
+                "clippy",
+                f"Reminder set for **{format_wallclock(sched.wake_at)}** "
+                f"(`{sched.id}`): {schedule_what}",
+            )
+        # A delegated worker may also post its own OS notification via a
         # [CLIPPY::NOTIFY] directive — strip it from the report and surface it.
         report, notify_text = parse_notify(report)
         if notify_text:
@@ -923,13 +938,17 @@ class Session:
         model = task.model or self.model
         tools = task.tools or tools or None
         if self.real or pi_ready():
-            # Workers learn the notify protocol (emit [CLIPPY::NOTIFY]) so a
-            # delegated task can surface its own OS notification.
+            # Workers learn the notify + schedule protocols (emit
+            # [CLIPPY::NOTIFY] / [CLIPPY::SCHEDULE]) so a delegated task can
+            # surface its own notification or schedule a reminder.
             agent = PiSubAgent(
                 task=text,
                 model=model,
                 tools=tools,
-                skills=[str(SKILLS_DIR / "notify")],
+                skills=[
+                    str(SKILLS_DIR / "notify"),
+                    str(SKILLS_DIR / "schedule"),
+                ],
             )
             print(f"[clippy] delegating to PI sub-agent ({model})")
         else:

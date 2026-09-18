@@ -2,8 +2,8 @@
 id: 026
 title: Sub-clippys can schedule tasks (delegated scheduling)
 type: research
-status: open
-assignee:
+status: closed
+assignee: pete
 blocked_by: []
 labels: [wayfinder:research]
 ---
@@ -39,4 +39,19 @@ scheduler entry?
 
 ## Resolution
 
-(open — pending decision on the trust boundary)
+**Decision: allow workers to schedule unconditionally**, matching the prime's
+schedule capability. The effect is bounded: `parse_trigger` accepts only
+`in`/`at`/`every`/`daily`, and the resulting task action is `notify` (an OS
+notification at due time, pane fallback).
+
+**Implementation (commit 035-area / 026):**
+- `_spawn_worker` loads the `schedule` skill alongside `notify` into the worker
+  (`PiSubAgent.skills = [clippy/skills/notify, clippy/skills/schedule]`).
+- `_on_sub_done` runs `parse_schedule(report)` first: if it yields a trigger +
+  what, it schedules a notify task and confirms in the pane ("Reminder set for
+  …"), stripping the directive from the relayed report + steer. A worker
+  schedule does not suppress the generic completion ping (only a worker
+  `[CLIPPY::NOTIFY]` does).
+- Verified: `_on_sub_done` schedules + strips + keeps the generic ping;
+  schedule+notify both handled; `_cmd` carries both `--skill` paths; live worker
+  report with a schedule directive creates a task that fires after the delay.
