@@ -65,21 +65,21 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
 ## Architecture
 
 ```
-                 ┌──────────────────────────── pyglet / pyobjc (main thread) ────────────────────────────┐
-                 │                                                                                        │
-   user          │   ┌──────────────┐  moods/bubble   ┌────────────────┐   typed events   ┌────────────┐  │
- ───────────────▶│   │  avatar shell │◀─────────────── │ PrimeController │◀──────────────── │  PiBrain   │  │
-   chat input    │   └──────────────┘                  └────────────────┘                  └─────┬──────┘  │
-                 │        ▲ answers / cards / stream                            RPC JSONL        │ pi --mode rpc
-                 │   ┌────┴────────────┐            ┌─────────────┐                 ┌──────────▼─────────┐
-                 │   │  w1c pane       │◀──────────▶│   Session   │                 │        Pi          │
-                 │   │ (WKWebView)     │  JS bridge  │  (graph)    │                 │  tools·skills·prov │
-                 │   └─────────────────┘            └──────┬──────┘                 └─────────────────────┘
-                 │                                        │ delegate
-                 │   ┌──────────────┐   events    ┌───────▼──────┐   one-shot JSON ┌─────────────────────┐
-                 │   │ sub-clippy    │◀─────────── │SubClippyCtrl │◀──────────────── │      PiSubAgent     │
-                 │   │ shell (+boom) │             └──────────────┘                  └─────────────────────┘
-                 └────────────────────────────────────────────────────────────────────────────────────────┘
+                 ┌──────────────────────────── pyglet / pyobjc (main thread) ────────────────────────────────────┐
+                 │                                                                                               │
+   user          │   ┌───────────────┐  moods/bubble   ┌─────────────────┐   typed events   ┌────────────┐       │
+ ───────────────▶│   │  avatar shell │◀─────────────── │ PrimeController │◀──────────────── │  PiBrain   │       │
+   chat input    │   └───────────────┘                 └─────────────────┘                  └────┬───────┘       │
+                 │        ▲ answers / cards / stream                            RPC JSONL        │ pi --mode rpc |
+                 │   ┌────┴────────────┐            ┌─────────────┐                 ┌────────────▼────────┐      |
+                 │   │  w1c pane       │◀──────────▶│   Session   │                 │        Pi           │      |
+                 │   │ (WKWebView)     │  JS bridge │  (graph)    │                 │  tools·skills·prov  │      |
+                 │   └─────────────────┘            └──────┬──────┘                 └─────────────────────┘      |
+                 │                                         │ delegate                                            |
+                 │   ┌───────────────┐   events    ┌───────▼──────┐   one-shot JSON  ┌─────────────────────┐     |
+                 │   │ sub-clippy    │◀─────────── │SubClippyCtrl │◀──────────────── │      PiSubAgent     │     |
+                 │   │ shell (+boom) │             └──────────────┘                  └─────────────────────┘     |
+                 └───────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Projection over Pi.** Pi is the doer *and* the brain: one long-lived `pi --mode rpc
