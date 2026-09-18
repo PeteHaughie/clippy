@@ -51,9 +51,12 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
   the brain in build mode where writes ask for consent.
 - **Persistent memory** — `~/.clippy/memory/INDEX.md` is injected deterministically into every
   brain session (`--append-system-prompt`), plus a `memory` skill for read/write discipline.
-- **Skills allowlist** — Clippy-owned skills (`memory`, `sub-clippy`, `move`) are always on;
-  the user's `skills.allow` in config adds more (Pi auto-discovery is disabled with a
-  non-empty allowlist).
+- **Skills allowlist** — Clippy-owned skills (`memory`, `sub-clippy`, `move`,
+  `schedule`, `notify`) are always on; the user's `skills.allow` in config
+  (`~/.clippy/config.json`) adds more, e.g. `~/.agents/skills/<name>` (Pi
+  auto-discovery is disabled with a non-empty allowlist). Allowlisted skills are
+  model tools — full use (web/write/bash) needs **build mode**; sandbox
+  (read-only tools) limits them to reading.
 - **Sub-clippy delegation** — `/delegate <task>` (or an autonomous `[CLIPPY::DELEGATE]`
   directive) spawns a separate one-shot Pi sub-agent in its own floating shell that works,
   reports back, celebrates and **explodes** on completion.
