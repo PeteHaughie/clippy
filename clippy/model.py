@@ -122,7 +122,8 @@ class Model:
         lines.append("## Nodes")
         for n in self.nodes:
             prov = f"  ({', '.join(n.provenance)})" if n.provenance else ""
-            lines.append(f"- `{n.id}` ({n.kind}): {n.name}{prov}")
+            attrs = f"  {n.attrs}" if n.attrs else ""
+            lines.append(f"- `{n.id}` ({n.kind}): {n.name}{attrs}{prov}")
         lines.append("")
         lines.append("## Edges")
         for e in self.edges:
@@ -276,6 +277,36 @@ EV_KINDS: dict[str, type] = {
 }
 
 
+# ------------------------------------------------------- value types
+#: P5: the graph's ``task`` node is backed by this typed value (a delegation
+#: request) instead of a bare string + text protocol. Not an ``Ev`` — it's a
+#: value projected through the ``task`` node, not something the event router
+#: consumes.
+
+
+@dataclass(frozen=True)
+class Delegation:
+    id: str = ""
+    text: str = ""
+    tools: tuple = ()          # worker tool allowlist (e.g. SANDBOX_TOOLS)
+    model: str = ""            # worker model; "" = use the host default
+    source: str = ""           # "chat" | "directive" | "startup" — provenance
+    kind: ClassVar[str] = "task"
+
+    @classmethod
+    def make(
+        cls,
+        text: str,
+        tools=(),
+        model: str = "",
+        source: str = "",
+    ) -> "Delegation":
+        import uuid
+
+        return cls(id=uuid.uuid4().hex[:8], text=text, tools=tuple(tools),
+                   model=model, source=source)
+
+
 # ------------------------------------------------------- state-machine configs
 #: Shapes are graph data: states = nodes, transitions = edges. ``timeout`` /
 #: ``on_timeout`` / ``on_enter`` / ``guard`` / ``effect`` name runtime-provided
@@ -372,7 +403,7 @@ SESSION_NODES: list[tuple[str, str, str, tuple]] = [
     ("shell", "component", "floating avatar window (status line, bubble, mood)", ("003",)),
     ("shell_worker", "component", "sub-clippy's floating window", ("004",)),
     ("pane", "interface", "w1c chat pane + dialog cards + mode badge", ("010", "016")),
-    ("task", "value", "delegation request (text/tools/model)", ("019",)),
+    ("task", "value", "delegation request (typed Delegation)", ("019",), {"type": "Delegation"}),
     ("dialog", "state", "pending consent card", ("016",)),
     ("mode", "state", "sandbox | build", ("005", "017")),
     ("memory_store", "resource", "~/.clippy/memory INDEX + topic files", ("017",)),
@@ -424,8 +455,13 @@ SESSION_CONSTRAINTS: list[tuple[str, str, tuple]] = [
 def build_session_graph() -> Model:
     """The canonical session topology with provenance and constraints."""
     model = Model()
-    for (id, kind, name, prov) in SESSION_NODES:
-        model.node(id, kind, name, provenance=prov)
+    for row in SESSION_NODES:
+        if len(row) == 5:
+            id, kind, name, prov, attrs = row
+        else:
+            id, kind, name, prov = row
+            attrs = {}
+        model.node(id, kind, name, attrs=attrs, provenance=prov)
     for (src, dst, kind, attrs, prov) in SESSION_EDGES:
         model.edge(src, dst, kind, attrs=attrs, provenance=prov)
     for (name, expr, prov) in SESSION_CONSTRAINTS:

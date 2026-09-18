@@ -23,7 +23,7 @@ import pyglet
 from .brain import DEFAULT_MODEL, MockBrain, PiBrain
 from .controller import SubClippyController
 from .memory import ensure_memory, resolve_skill_paths
-from .model import build_session_graph, required_topology
+from .model import Delegation, build_session_graph, required_topology
 from .pane import Pane
 from .prime import PrimeController
 from .shell import ClippyShell
@@ -103,6 +103,7 @@ class Session:
         self.brain = None
         self.prime_controller = None
         self._worker_controller = None
+        self._worker_delegation: Delegation | None = None
 
         self.graph = build_session_graph()
         self._validate_topology()
@@ -259,7 +260,20 @@ class Session:
             print(f"[clippy] unknown scheduled action {action!r}", flush=True)
 
     def dump(self) -> str:
-        return self.graph.dump()
+        text = self.graph.dump()
+        d = self._worker_delegation
+        if d is not None:
+            text += (
+                "\n## Current delegation\n"
+                f"- id: {d.id}\n"
+                f"- text: {d.text}\n"
+                f"- tools: {', '.join(d.tools)}\n"
+                f"- model: {d.model or '(default)'}\n"
+                f"- source: {d.source}\n"
+            )
+        else:
+            text += "\n## Current delegation\n- none\n"
+        return text
 
     # --------------------------------------------------------------- prime
 
@@ -759,7 +773,12 @@ class Session:
         clean, notify_text = parse_notify(clean)
         if task:
             self.shell.set_bubble("(handing off to a sub-clippy…)")
-            self.delegate(task, tools=SANDBOX_TOOLS, on_complete=self._on_sub_done)
+            self.delegate(
+                task,
+                tools=SANDBOX_TOOLS,
+                on_complete=self._on_sub_done,
+                source="directive",
+            )
         if move:
             self._run_move(move)
         if trigger and schedule_what:
@@ -858,37 +877,63 @@ class Session:
 
     # --------------------------------------------------------------- worker
 
-    def delegate(self, task: str = DEFAULT_TASK, tools=None, on_complete=None) -> bool:
-        """Spawn a sub-clippy for ``task``. Returns False if already delegating.
+    def delegate(
+        self,
+        task: Delegation | str = DEFAULT_TASK,
+        tools=None,
+        on_complete=None,
+        source: str = "startup",
+    ) -> bool:
+        """Spawn a sub-clippy for ``task`` (a typed :class:`Delegation`, or a
+        bare string coerced to one). Returns False if already delegating.
         The slot frees itself when the worker completes, so a later delegation
         can start a new one."""
         if self._worker_controller is not None:
             print("[clippy] already delegating")
             return False
+        if isinstance(task, Delegation):
+            d = task
+            if (not d.tools and tools) or not d.source:
+                # Fill missing pieces (tools and/or source tag) in one re-make.
+                d = Delegation.make(
+                    d.text,
+                    tools=d.tools or tools or (),
+                    model=d.model,
+                    source=d.source or source,
+                )
+        else:
+            d = Delegation.make(
+                task, tools=tools or (), model=self.model, source=source
+            )
+        self._worker_delegation = d
 
         def _wrap(failed: bool, report: str):
             self._worker_controller = None
+            self._worker_delegation = None
             if on_complete:
                 on_complete(failed, report)
 
-        self._worker_controller = self._spawn_worker(task, tools=tools, on_complete=_wrap)
+        self._worker_controller = self._spawn_worker(d, tools=d.tools or tools, on_complete=_wrap)
         return True
 
-    def _spawn_worker(self, task: str, tools=None, on_complete=None) -> SubClippyController:
+    def _spawn_worker(self, task: Delegation, tools=None, on_complete=None) -> SubClippyController:
         from .roots import SKILLS_DIR
 
+        text = task.text
+        model = task.model or self.model
+        tools = task.tools or tools or None
         if self.real or pi_ready():
             # Workers learn the notify protocol (emit [CLIPPY::NOTIFY]) so a
             # delegated task can surface its own OS notification.
             agent = PiSubAgent(
-                task=task,
-                model=self.model,
+                task=text,
+                model=model,
                 tools=tools,
                 skills=[str(SKILLS_DIR / "notify")],
             )
-            print(f"[clippy] delegating to PI sub-agent ({self.model})")
+            print(f"[clippy] delegating to PI sub-agent ({model})")
         else:
-            agent = MockSubAgent(task=task)
+            agent = MockSubAgent(task=text)
             print("[clippy] PI not ready — delegating to mock sub-agent")
         # Sub-clippy renders at 75% of Prime's scale and spawns beside him (to
         # the right), never directly on top — the sub window is sized from the
@@ -906,7 +951,7 @@ class Session:
 
             stamp = datetime.datetime.now().strftime("%H%M%S")
             worker_log = ChatLogger(make_chat_log(f"subclippy-{stamp}"), label="subclippy")
-            worker_log.marker("task", text=task, model=self.model)
+            worker_log.marker("task", text=text, model=model)
             ctrl.router.logger = worker_log
         shell.show()
         # On X11/XWayland the constructor's set_location runs before the window
@@ -928,7 +973,12 @@ class Session:
 
     def _start_delegation(self, task: str):
         self.shell.set_bubble("(handing off to a sub-clippy…)")
-        ok = self.delegate(task, tools=SANDBOX_TOOLS, on_complete=self._on_sub_done)
+        ok = self.delegate(
+            task,
+            tools=SANDBOX_TOOLS,
+            on_complete=self._on_sub_done,
+            source="chat",
+        )
         if not ok:
             self.pane.add_message(
                 "clippy", "A sub-clippy is already at work — let it finish first."
