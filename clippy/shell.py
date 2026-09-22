@@ -7,6 +7,8 @@ can be asked (by the user or the brain) to move himself around. The old
 click-through mode is still available via :meth:`ClippyShell.toggle_passthrough`
 but is off by default so the window can be grabbed and dragged."""
 
+import sys
+
 import pyglet
 from pyglet.gl import current_context
 from pyglet.window import Window
@@ -49,6 +51,9 @@ class ClippyShell(Window):
         )
         screens.set_window_top_left(self, *position)
         self.passthrough = False
+        # Undo the overlay style's forced click-through so Clippy is grabbable
+        # (see set_mouse_passthrough); toggle_passthrough() can turn it back on.
+        self.set_mouse_passthrough(False)
         #: Cursor-poll drag (see on_mouse_press / update). ``_drag_offset`` is
         #: the grab point relative to the window's top-left, so the window
         #: tracks the cursor 1:1 without the delta feedback that made the old
@@ -72,6 +77,38 @@ class ClippyShell(Window):
         self.passthrough = not self.passthrough
         self.set_mouse_passthrough(self.passthrough)
         print(f"[clippy] click-through = {self.passthrough}")
+
+    def set_mouse_passthrough(self, state: bool) -> None:
+        """X11-safe mouse passthrough.
+
+        ``WINDOW_STYLE_OVERLAY`` forces passthrough ON at creation (pyglet's
+        overlay = click-through + always-on-top), which made Clippy
+        ungrabbable. pyglet 2.1.16's X11 ``False`` path is also broken — it
+        calls ``XShapeCombineMask`` with a bad ctypes signature and raises — so
+        the forced passthrough could never be undone. Drive the input *region*
+        directly instead: empty region = click-through, full-window region =
+        normal input.
+        """
+        if sys.platform == "darwin" or not hasattr(self, "_x_display"):
+            return super().set_mouse_passthrough(state)
+        try:
+            from ctypes import byref
+
+            from pyglet.libs.x11 import xlib, xsync
+
+            region = xlib.XCreateRegion()
+            try:
+                if not state:
+                    rect = xlib.XRectangle(0, 0, int(self.width), int(self.height))
+                    xlib.XUnionRectWithRegion(byref(rect), region, region)
+                xsync.XShapeCombineRegion(
+                    self._x_display, self._window, xsync.ShapeInput,
+                    0, 0, region, xsync.ShapeSet,
+                )
+            finally:
+                xlib.XDestroyRegion(region)
+        except Exception as exc:  # pragma: no cover — best effort, X11 only
+            print(f"[clippy] set_mouse_passthrough({state}) failed: {exc}", flush=True)
 
     # ------------------------------------------------------- position API
     # Screen coordinates follow pyglet's convention: (x, y) is the window's
