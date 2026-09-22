@@ -22,6 +22,8 @@ Flags:
   --real                         force the real Pi sub-agent (oMLX) instead of
                                  auto-falling back to the mock
   --model <omlx/model>           which oMLX model the real sub-agent uses
+  --vsync                        force GLX buffer-swap vsync on (Linux defaults
+                                 it off to avoid XWayland/Mutter overlay flicker)
 
 The app itself is a projection of the session graph (clippy/session.py /
 clippy/model.py): the control plane is declared as typed nodes/edges/
@@ -71,19 +73,24 @@ def run_integrated():
     WebKitGTK pane needs GLib's main loop on the main thread, so the avatar is
     pumped from a ~30fps GLib timer (see ``PUMP_MS``) exactly the way pyglet's
     own main loop would:
-    ``clock.tick()`` for simulation + per-window draw/flip for the frame. The
-    loop ends when pyglet wants out (Q, or the last Clippy window closing),
-    at which point GTK quits too.
+    ``clock.tick()`` for simulation + per-window draw for the frame. The loop
+    ends when pyglet wants out (Q, or the last Clippy window closing), at which
+    point GTK quits too.
     """
     from gi.repository import GLib, Gtk
 
+    # Match pyglet's own EventLoop.run: without this, dispatch_event('on_draw')
+    # inside Window.draw() is queued and runs on the *next* dispatch_events(),
+    # deferring every frame by one pump and letting draws race X-event polling
+    # under XWayland. With the queue disabled draws are synchronous.
+    pyglet.window.Window._enable_event_queue = False
+
     def _pump(*_unused):
-        pyglet.clock.tick()
+        dt = pyglet.clock.tick()
         for window in list(pyglet.app.windows):
             window.switch_to()
             window.dispatch_events()
-            window.dispatch_event("on_draw")
-            window.flip()
+            window.draw(dt)
         if pyglet.app.event_loop.has_exit:
             Gtk.main_quit()
             return False
@@ -131,7 +138,23 @@ def main() -> int:
         default=None,
         help="model for the real Pi brain/sub-agent (default: config 'model', else built-in)",
     )
+    parser.add_argument(
+        "--vsync",
+        action="store_true",
+        help="force GLX buffer-swap vsync on (default: off on Linux, which "
+        "avoids XWayland/Mutter transparent-overlay flicker)",
+    )
     args = parser.parse_args()
+
+    # Must be set before any window/context is created. On XWayland a vsync'd
+    # GLX swap can stall or present stale buffers on a transparent overlay,
+    # which shows up as the whole avatar blinking; so Linux defaults to vsync
+    # off (tearing is a non-issue for this low-rate, mostly-static sprite).
+    # Other platforms keep pyglet's default (on) unless --vsync is given.
+    if args.vsync:
+        pyglet.options["vsync"] = True
+    elif sys.platform.startswith("linux"):
+        pyglet.options["vsync"] = False
 
     shell = PrimeShell(scale=args.scale, live_key=not args.no_shader, position=PRIME_POS)
     shell.show()

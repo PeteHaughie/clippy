@@ -193,6 +193,7 @@ scratch dir are all created/used on demand. See [Configuration](#configuration).
 | `--model <model>` | Model for the real brain/sub-agent (default `opencode/deepseek-v4-flash`). |
 | `--scale <n>` | Avatar scale (default `3.0`). |
 | `--no-shader` | Use ffmpeg-baked explosion frames instead of the live GLSL chroma-key shader. |
+| `--vsync` | Force GLX buffer-swap vsync on. Linux defaults it **off** to avoid the transparent-overlay flicker some XWayland/Mutter (GNOME Wayland) setups show. |
 
 ### Controls
 
