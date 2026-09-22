@@ -24,7 +24,7 @@ import pyglet
 from .brain import DEFAULT_MODEL, MockBrain, PiBrain
 from .controller import SubClippyController
 from .memory import ensure_memory, resolve_skill_paths
-from .model import Delegation, build_session_graph, required_topology
+from .model import Delegation, MoveSpec, build_session_graph, required_topology
 from .pane import Pane
 from .prime import PrimeController
 from .shell import ClippyShell
@@ -36,8 +36,10 @@ from .subagent import (
     PiSubAgent,
     parse_delegation,
     parse_move,
+    parse_move_spec,
     pi_ready,
 )
+from . import screens
 from .notify import notify
 from .scheduler import parse_notify, parse_schedule, parse_trigger
 from .timeutil import humanize, time_header
@@ -59,6 +61,7 @@ GATE_EXT = str(
 HELP_CMD = "/help"
 EXIT_CMD = "/exit"
 MOOD_CMD = "/mood"
+MONITORS_CMD = "/monitors"
 MOVE_CMD = "/move"
 QUIT_CMD = "/quit"
 REMIND_CMD = "/remind"
@@ -88,6 +91,8 @@ HELP_TEXT = (
     "- `/move <spot>` or `/move <x> <y>` — move me on screen (spots: "
     "top-left / top-right / bottom-left / bottom-right / center / left / "
     "right / top / bottom)\n"
+    "- `/move monitor <n> [spot]` — move me to a monitor (1-based, "
+    "left-to-right); `/monitors` lists them\n"
     "- `/remind <when> <what>` — schedule a reminder (e.g. `/remind in 5 "
     "minutes stretch`, `/remind daily at 9:00 standup`)\n"
     "- `/schedule` — list scheduled tasks; `/schedule cancel <id>` removes one\n"
@@ -387,10 +392,15 @@ class Session:
             return
         if command_matches(low, WHERE_CMD):
             x, y = self.shell.position
-            self.pane.add_message("clippy", f"I'm at ({x}, {y}).")
+            idx = self.shell.monitor_index()
+            where = f"I'm at ({x}, {y})" + (f" on monitor {idx}" if idx else "") + "."
+            self.pane.add_message("clippy", where)
             return
         if command_matches(low, MOOD_CMD):
             self._run_mood(stripped[len(MOOD_CMD):].strip())
+            return
+        if command_matches(low, MONITORS_CMD):
+            self._run_monitors()
             return
         if command_matches(low, MOVE_CMD):
             self._run_move(self._command_move_spec(stripped[len(MOVE_CMD):].strip()))
@@ -457,35 +467,55 @@ class Session:
 
     # ------------------------------------------------------------- movement
 
-    def _command_move_spec(self, arg: str) -> str | tuple[int, int] | None:
-        """Interpret a /move argument: ``<x> <y>`` coords or a named spot."""
-        if not arg:
-            return None
-        parts = arg.split()
-        if len(parts) == 2:
-            try:
-                return (int(parts[0]), int(parts[1]))
-            except ValueError:
-                return None
-        return arg.strip().lower()
+    def _command_move_spec(self, arg: str) -> MoveSpec | None:
+        """Interpret a /move argument: ``<x> <y>`` coords, ``monitor <n>
+        [spot]``, or a named spot."""
+        return parse_move_spec(arg)
 
-    def _run_move(self, spec: str | tuple[int, int] | None):
-        """Apply a move spec (spot name or (x, y)) and confirm in the pane.
-        Used by both the /move command and the brain's [CLIPPY::MOVE] block."""
-        if isinstance(spec, tuple):
-            x, y = spec
-            self.shell.move_to(x, y)
-            self.pane.add_message("clippy", f"Moved to ({x}, {y}).")
-            return
-        if isinstance(spec, str) and spec in self.shell.SPOTS:
-            self.shell.move_to_spot(spec)
-            self.pane.add_message("clippy", f"Moved to {spec}.")
-            return
-        self.pane.add_message(
-            "clippy",
+    def _run_move(self, spec: MoveSpec | None):
+        """Apply a move spec and confirm in the pane. Used by both the /move
+        command and the brain's [CLIPPY::MOVE] block."""
+        usage = (
             "`/move <spot>` (top-left/top-right/bottom-left/bottom-right/"
-            "center/left/right/top/bottom) or `/move <x> <y>`.",
+            "center/left/right/top/bottom), `/move <x> <y>`, or "
+            "`/move monitor <n> [spot]`."
         )
+        if spec is None:
+            self.pane.add_message("clippy", usage)
+            return
+        if spec.mode == "coords":
+            self.shell.move_to(spec.x, spec.y)
+            self.pane.add_message("clippy", f"Moved to ({spec.x}, {spec.y}).")
+            return
+        if spec.mode == "monitor":
+            if self.shell.move_to_monitor(spec.monitor, spec.spot or None):
+                label = f"monitor {spec.monitor}" + (f" {spec.spot}" if spec.spot else "")
+                self.pane.add_message("clippy", f"Moved to {label}.")
+            else:
+                self.pane.add_message(
+                    "clippy",
+                    f"There's no monitor {spec.monitor} — try `/monitors`.",
+                )
+            return
+        if spec.spot in self.shell.SPOTS:
+            self.shell.move_to_spot(spec.spot)
+            self.pane.add_message("clippy", f"Moved to {spec.spot}.")
+            return
+        self.pane.add_message("clippy", usage)
+
+    def _run_monitors(self):
+        """List the monitors Clippy can see (1-based, left-to-right)."""
+        areas = screens.list_workareas()
+        if not areas:
+            self.pane.add_message("clippy", "I can't see any monitors.")
+            return
+        lines = [f"I can see {len(areas)} monitor(s):"]
+        for wa in areas:
+            x, y, w, h = wa["rect"]
+            tag = " (primary)" if wa["primary"] else ""
+            lines.append(f"- **{wa['index']}** — {w}x{h} at ({x}, {y}){tag}")
+        lines.append("\n`/move monitor <n> [spot]` to move there.")
+        self.pane.add_message("clippy", "\n".join(lines))
 
     # ----------------------------------------------------------- time/tasks
 
@@ -1125,7 +1155,7 @@ class Session:
         # is mapped and the WM ignores it, so both shells land at the same spot
         # ("sub-clippy on top of Prime"). Re-assert the position now that the
         # window is mapped so the sub actually sits beside Prime.
-        shell.set_location(sx, sy)
+        screens.set_window_top_left(shell, sx, sy)
         pyglet.clock.schedule_interval(shell.update, 1 / 60)
         pyglet.clock.schedule_interval(ctrl.update, 1 / 60)
         # The worker's construction and show() both make ITS GL context current

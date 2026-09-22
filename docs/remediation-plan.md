@@ -108,12 +108,34 @@ makes the tool list cosmetic). `Suggest` runs read-only with the user's guidance
 appended; `Dismiss` spawns nothing; no confirmable pane (NullPane) fails safe to
 read-only. The prime can *request* escalation but never grants it — only the user does.
 
+## Phase 7 — Multi-monitor geometry, dragging, and monitor commands
+
+Follow-up gap: Clippy didn't recognise multiple monitors. On Linux
+`visible_screen()` returned `None` (no `_nswindow`) so `_visible_rect()` was a
+hardcoded `(0,0,1920,1080)`; `_clamp` pinned him inside it (no cross-monitor
+moves); and the delta-driven `on_mouse_drag` self-cancelled (moving the window
+changes the next event's delta), so he wasn't really draggable.
+
+| # | Issue | Fix | Verify |
+|---|---|---|---|
+| 7.1 | Linux hardcoded screen; moves pinned to one monitor | New `clippy/screens.py`: pyglet screens (same space as `set_location`) + GDK work areas scaled into that space; `clamp` targets the point's screen | `tests/test_screens.py`, real-backend smoke |
+| 7.2 | Drag not working (delta feedback) | `on_mouse_press` records the grab offset; `update` polls the global cursor (`XQueryPointer`) and places the window at `cursor − offset`, clamped to the union of work areas (cross-monitor). Falls back to delta drag where no global cursor exists | drag-target unit test + manual |
+| 7.3 | No monitor awareness in commands | `/monitors`; `/move monitor <n> [spot]`; `[CLIPPY::MOVE] monitor <n> [spot]`; `/where` reports the monitor. `MoveSpec` value type shared by `/move` and the directive | `tests/test_screens.py`, `tests/test_directives.py` |
+| 7.4 | macOS | Stubbed (`_MacBackend`): keeps pyglet behaviour (primary screen, no work-area inset) with a TODO for the AppKit `NSScreen`/`setFrameTopLeftPoint_` rewrite | review |
+
+Notes:
+- Work areas respect panels/docks; the GDK→pyglet scale is inferred from the
+  monitor at the origin (XWayland global scale), with a full-geometry fallback.
+- Monitor numbering is **1-based, left-to-right**; `/move monitor <n>` centres.
+- The pane was **not** touched (it was already correct); `_visible_rect` now
+  feeds it a real work area, which only affects edge clamping.
+
 ## Result
 
 All items implemented. Verification:
 
 ```
-.venv/bin/python -m unittest discover -s tests   # 58 tests, OK
+.venv/bin/python -m unittest discover -s tests   # 75 tests, OK
 node --test tests/test_sanitize.mjs              # 3 tests, OK
 .venv/bin/python -m py_compile clippy/*.py main.py
 CLIPPY_HOME=$(mktemp -d) .venv/bin/python -m clippy.brain --mock   # SETTLED

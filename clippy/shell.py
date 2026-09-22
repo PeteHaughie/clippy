@@ -11,6 +11,7 @@ import pyglet
 from pyglet.gl import current_context
 from pyglet.window import Window
 
+from . import screens
 from .avatar import Avatar, frame_size
 from .explosion import Explosion
 
@@ -46,8 +47,14 @@ class ClippyShell(Window):
         self.explosion = Explosion(
             live_key=live_key, scale=scale, fit=(w - 2 * padding, h - 2 * padding)
         )
-        self.set_location(*position)
+        screens.set_window_top_left(self, *position)
         self.passthrough = False
+        #: Cursor-poll drag (see on_mouse_press / update). ``_drag_offset`` is
+        #: the grab point relative to the window's top-left, so the window
+        #: tracks the cursor 1:1 without the delta feedback that made the old
+        #: delta-driven drag self-cancel.
+        self._dragging = False
+        self._drag_offset: tuple[int, int] | None = None
         self._exploded = False
         self.thinking = False
         #: Prime-shell status (Phase 3): sandbox/build badge + pending-dialog
@@ -72,8 +79,8 @@ class ClippyShell(Window):
 
     @property
     def position(self) -> tuple[int, int]:
-        """Where Clippy's top-left corner is on screen, ``(x, y)``."""
-        return self.get_location()
+        """Where Clippy's top-left corner is on screen, ``(x, y)`` (global)."""
+        return screens.window_top_left(self)
 
     @property
     def size(self) -> tuple[int, int]:
@@ -81,7 +88,11 @@ class ClippyShell(Window):
         return self.width, self.height
 
     def visible_screen(self):
-        """The AppKit screen the window currently sits on (None if unknown)."""
+        """The AppKit screen the window currently sits on (None if unknown).
+
+        Kept for the macOS pane backend; geometry itself goes through
+        :mod:`clippy.screens`.
+        """
         ns = getattr(self, "_nswindow", None)
         if ns is None:
             return None
@@ -91,37 +102,28 @@ class ClippyShell(Window):
             return None
 
     def _visible_rect(self) -> tuple[int, int, int, int]:
-        """Usable screen area ``(x, y, w, h)`` in pyglet top-left coords:
-        the screen frame minus the menu bar and dock, so Clippy never hides
-        behind them."""
-        ns = self.visible_screen()
-        if ns is None:
-            return 0, 0, 1920, 1080
-        frame = ns.frame()
-        vis = ns.visibleFrame()
-        x = int(vis.origin.x - frame.origin.x)
-        w = int(vis.size.width)
-        top = int(frame.size.height - (vis.origin.y - frame.origin.y + vis.size.height))
-        h = int(vis.size.height)
-        return x, top, w, h
+        """Usable (work) area of the screen Clippy is on, global top-origin."""
+        return screens.workarea_for_window(self)
+
+    def monitor_index(self) -> int | None:
+        """The 1-based index of the monitor Clippy is currently on."""
+        x, y = self.position
+        return screens.monitor_index_for_point(x, y)
 
     def _clamp(self, x: int, y: int) -> tuple[int, int]:
-        """Clamp a requested top-left ``(x, y)`` so the window stays fully on
-        the visible screen."""
+        """Clamp a requested top-left ``(x, y)`` into the target point's work
+        area (so a move can cross monitors)."""
         w, h = self.size
-        sx, sy, sw, sh = self._visible_rect()
-        margin = 8
-        x = max(sx + margin, min(int(x), sx + sw - w - margin))
-        y = max(sy + margin, min(int(y), sy + sh - h - margin))
-        return x, y
+        return screens.clamp_to_workarea(x, y, w, h)
 
     def move_to(self, x: int, y: int):
-        """Move Clippy so his top-left corner is at ``(x, y)`` (clamped on-screen)."""
-        self.set_location(*self._clamp(x, y))
+        """Move Clippy so his top-left corner is at ``(x, y)`` (clamped
+        on-screen)."""
+        screens.set_window_top_left(self, *self._clamp(x, y))
 
     def move_by(self, dx: int, dy: int):
         """Shift Clippy by ``(dx, dy)`` in the position-API coordinate space."""
-        x, y = self.get_location()
+        x, y = self.position
         self.move_to(x + dx, y + dy)
 
     #: Named spots Clippy can move to (:meth:`move_to_spot`).
@@ -136,30 +138,23 @@ class ClippyShell(Window):
         key = (name or "").strip().lower()
         if key not in self.SPOTS:
             return False
-        sx, sy, sw, sh = self._visible_rect()
         w, h = self.size
-        m = 12
-        cx = sx + (sw - w) // 2
-        cy = sy + (sh - h) // 2
-        if key == "top-left":
-            x, y = sx + m, sy + m
-        elif key == "top-right":
-            x, y = sx + sw - w - m, sy + m
-        elif key == "bottom-left":
-            x, y = sx + m, sy + sh - h - m
-        elif key == "bottom-right":
-            x, y = sx + sw - w - m, sy + sh - h - m
-        elif key == "center":
-            x, y = cx, cy
-        elif key == "left":
-            x, y = sx + m, cy
-        elif key == "right":
-            x, y = sx + sw - w - m, cy
-        elif key == "top":
-            x, y = cx, sy + m
-        else:  # bottom
-            x, y = cx, sy + sh - h - m
-        self.set_location(x, y)
+        x, y = screens.spot_position(key, w, h, self._visible_rect())
+        screens.set_window_top_left(self, *self._clamp(x, y))
+        return True
+
+    def move_to_monitor(self, index: int, spot: str | None = None) -> bool:
+        """Move Clippy to a 1-based monitor (centre, or a named spot on it).
+        Returns False if there is no such monitor or the spot is unknown."""
+        rect = screens.workarea_by_index(int(index))
+        if rect is None:
+            return False
+        if spot is not None and spot not in self.SPOTS:
+            return False
+        w, h = self.size
+        x, y = screens.spot_position(spot or "center", w, h, rect)
+        x, y = screens.clamp_to_rect(x, y, w, h, rect)
+        screens.set_window_top_left(self, x, y)
         return True
 
     def express(self, mood: str, hint: str | None = None, text: str | None = None, force: bool = False):
@@ -233,15 +228,53 @@ class ClippyShell(Window):
         self.explosion.y = pad + (self.height - 2 * pad - eh) / 2
         self.explosion.draw()
 
+    # ------------------------------------------------------------- dragging
+    # Delta-driven drags self-cancel: moving the window changes the pointer's
+    # window-relative position, so the next event's delta is ~0. Instead, on
+    # press we record the grab offset from the window origin and, while held,
+    # poll the global cursor each frame and place the window at
+    # ``cursor - offset`` (clamped to the union of work areas, so he can cross
+    # monitors). Where a global cursor isn't available (the macOS stub), we
+    # fall back to the old delta path.
+
+    def on_mouse_press(self, x, y, button, modifiers):
+        if button != pyglet.window.mouse.LEFT:
+            return
+        pointer = screens.pointer_global(self)
+        if pointer is None:
+            return
+        wx, wy = self.position
+        self._drag_offset = (pointer[0] - wx, pointer[1] - wy)
+        self._dragging = True
+
+    def on_mouse_release(self, x, y, button, modifiers):
+        if button == pyglet.window.mouse.LEFT:
+            self._dragging = False
+            self._drag_offset = None
+
     def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
-        """Drag Clippy around by grabbing any part of his window. Mouse deltas
-        are up-positive (pyglet convention); screen y is top-origin, so the
-        vertical delta is negated."""
+        """Fallback drag for platforms without a global-cursor query (macOS
+        stub). Mouse deltas are up-positive; screen y is top-origin."""
+        if self._dragging:
+            return  # cursor polling handles it
         self.move_by(dx, -dy)
+
+    def _drag_tick(self):
+        if not self._dragging or self._drag_offset is None:
+            return
+        pointer = screens.pointer_global(self)
+        if pointer is None:
+            return
+        w, h = self.size
+        x, y = screens.drag_target(
+            pointer, self._drag_offset, w, h, screens.list_workarea_rects()
+        )
+        screens.set_window_top_left(self, x, y)
 
     def update(self, dt: float):
         # sprite.image swaps rebuild vertex lists, which needs the window's GL
         # context current — pyglet only makes it current during on_draw.
         self.switch_to()
+        self._drag_tick()
         self.avatar.update(dt)
         self.explosion.update(dt)

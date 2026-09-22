@@ -49,13 +49,22 @@ class DelegationTests(unittest.TestCase):
 class MoveTests(unittest.TestCase):
     def test_named_spot_without_close(self):
         clean, spec = parse_move("Moved.\n[CLIPPY::MOVE] top-left")
-        self.assertEqual(spec, "top-left")
+        self.assertEqual((spec.mode, spec.spot), ("spot", "top-left"))
         self.assertNotIn("CLIPPY::MOVE", clean)
 
     def test_coords_with_close(self):
         clean, spec = parse_move("[CLIPPY::MOVE] 10 20 [CLIPPY::END] done")
-        self.assertEqual(spec, (10, 20))
+        self.assertEqual((spec.mode, spec.x, spec.y), ("coords", 10, 20))
         self.assertEqual(clean, "done")
+
+    def test_monitor_with_spot(self):
+        clean, spec = parse_move("[CLIPPY::MOVE] monitor 2 top-right")
+        self.assertEqual((spec.mode, spec.monitor, spec.spot), ("monitor", 2, "top-right"))
+        self.assertNotIn("CLIPPY::MOVE", clean)
+
+    def test_monitor_without_spot(self):
+        _, spec = parse_move("[CLIPPY::MOVE] monitor 1")
+        self.assertEqual((spec.mode, spec.monitor, spec.spot), ("monitor", 1, ""))
 
 
 class ScheduleDirectiveTests(unittest.TestCase):

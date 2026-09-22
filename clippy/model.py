@@ -312,6 +312,21 @@ class Delegation:
                    model=model, source=source)
 
 
+#: P5: the move request as a typed value, so ``/move`` and the
+#: ``[CLIPPY::MOVE]`` directive share one representation instead of passing
+#: bare strings/tuples around. ``mode`` is one of:
+#:   ``"coords"``  — absolute ``(x, y)`` top-left
+#:   ``"spot"``    — a named spot on the current screen
+#:   ``"monitor"`` — a named spot (or centre) on a 1-based monitor
+@dataclass(frozen=True)
+class MoveSpec:
+    mode: str = "spot"
+    x: int = 0
+    y: int = 0
+    spot: str = ""
+    monitor: int = 0
+
+
 # ------------------------------------------------------- state-machine configs
 #: Shapes are graph data: states = nodes, transitions = edges. ``timeout`` /
 #: ``on_timeout`` / ``on_enter`` / ``guard`` / ``effect`` name runtime-provided

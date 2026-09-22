@@ -43,6 +43,14 @@ Absolute coordinates (x, y), where y grows downward from the top of the screen:
 [CLIPPY::END]
 ```
 
+Another monitor (1-based, left-to-right), optionally with a spot on it:
+
+```
+[CLIPPY::MOVE]
+monitor 2 top-right
+[CLIPPY::END]
+```
+
 The host strips the block from what the user sees, moves the window, and
-confirms the move in the chat. If the user asks where Clippy is, you can tell
-them to use the `/where` command.
+confirms the move in the chat. If the user asks where Clippy is, tell them to
+use `/where`; `/monitors` lists the screens Clippy can see.

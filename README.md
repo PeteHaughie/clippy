@@ -66,7 +66,10 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
   same card in any mode. The grant is per delegation — an allowed worker can run any command
   for its run.
 - **Position API** — Clippy knows where he is on screen and can be moved by you (`/move`,
-  drag) or by the brain (`[CLIPPY::MOVE]`).
+  drag) or by the brain (`[CLIPPY::MOVE]`). On Linux he sees every monitor: drag him
+  freely across screens, use `/move monitor <n> [spot]`, and `/monitors` to list them.
+  Geometry respects each monitor's work area (panels/docks) and is derived from the same
+  coordinate space as the window moves.
 
 ---
 
@@ -198,14 +201,16 @@ scratch dir are all created/used on demand. See [Configuration](#configuration).
 | `Q` | Quit |
 | `N` / `X` | Summon / hide the chat pane (`--brain` mode) |
 | `Tab` | Toggle sandbox ↔ build (`--brain` mode) |
-| drag | Grab Clippy anywhere and move him |
+| drag | Grab Clippy anywhere and move him (across monitors on Linux) |
 
 **Chat commands (pane):**
 
 | Command | Action |
 |---|---|
 | `/move <spot>` or `/move <x> <y>` | Move Clippy (spots: `top-left`, `center`, …) |
-| `/where` | Report Clippy's current position |
+| `/move monitor <n> [spot]` | Move Clippy to a monitor (1-based, left-to-right) |
+| `/monitors` | List the monitors Clippy can see |
+| `/where` | Report Clippy's current position and monitor |
 | `/delegate <task>` | Spawn a sub-clippy for the task (build mode asks how it may run) |
 | `/delegate --allow <task>` | Request command access for the worker (host asks for consent) |
 

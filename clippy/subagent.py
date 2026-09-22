@@ -19,6 +19,7 @@ import queue
 import time
 from pathlib import Path
 
+from .model import MoveSpec
 from .roots import make_scratch_dir
 
 #: Read/search-only tool allowlist for delegated sub-clippies (005/017).
@@ -92,14 +93,36 @@ def parse_delegation(text: str) -> tuple[str, str | None, bool]:
 MOVE_OPEN = "[CLIPPY::MOVE]"
 
 
-def parse_move(text: str) -> tuple[str, str | tuple[int, int] | None]:
+def parse_move_spec(body: str) -> MoveSpec | None:
+    """Parse a move body into a :class:`MoveSpec`.
+
+    Forms: ``<x> <y>`` (absolute), ``monitor <n> [spot]``, or a named spot.
+    Returns None for empty input.
+    """
+    body = (body or "").strip()
+    if not body:
+        return None
+    parts = body.split()
+    if parts[0].lower() == "monitor":
+        if len(parts) >= 2 and parts[1].lstrip("+-").isdigit():
+            spot = parts[2].lower() if len(parts) > 2 else ""
+            return MoveSpec(mode="monitor", monitor=int(parts[1]), spot=spot)
+        return MoveSpec(mode="spot", spot=body.lower())  # malformed → treated as spot
+    if len(parts) == 2:
+        try:
+            return MoveSpec(mode="coords", x=int(parts[0]), y=int(parts[1]))
+        except ValueError:
+            pass
+    return MoveSpec(mode="spot", spot=body.lower())
+
+
+def parse_move(text: str) -> tuple[str, MoveSpec | None]:
     """Return ``(clean_text, move_spec)`` for an assistant reply.
 
     If the reply carries a ``[CLIPPY::MOVE] … [CLIPPY::END]`` block (close
     marker optional), the block is stripped from ``clean_text`` and
-    ``move_spec`` is either an absolute ``(x, y)`` pair or a named-spot string
-    (validated by the caller against the shell's known spots). Without a block,
-    ``(text, None)``.
+    ``move_spec`` is a :class:`MoveSpec` (coords, named spot, or
+    ``monitor <n> [spot]``). Without a block, ``(text, None)``.
     """
     if not text:
         return "", None
@@ -107,17 +130,9 @@ def parse_move(text: str) -> tuple[str, str | tuple[int, int] | None]:
     if span is None:
         return text, None
     start, body_end, clean_end = span
-    spec = text[start + len(MOVE_OPEN):body_end].strip()
+    body = text[start + len(MOVE_OPEN):body_end].strip()
     clean = (text[:start] + text[clean_end:]).strip()
-    if not spec:
-        return clean, None
-    parts = spec.split()
-    if len(parts) == 2:
-        try:
-            return clean, (int(parts[0]), int(parts[1]))
-        except ValueError:
-            pass
-    return clean, spec  # named spot; caller validates
+    return clean, parse_move_spec(body)
 
 #: Default sub-Clippy model (OpenCode Zen DeepSeek V4 Flash).
 DEFAULT_MODEL = "opencode/deepseek-v4-flash"
