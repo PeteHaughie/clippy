@@ -70,6 +70,11 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
   freely across screens, use `/move monitor <n> [spot]`, and `/monitors` to list them.
   Geometry respects each monitor's work area (panels/docks) and is derived from the same
   coordinate space as the window moves.
+- **MCP bridge** — Pi has no built-in MCP, so Clippy bridges configured **stdio MCP
+  servers** into Pi as custom tools (a `clippy-mcp` extension plus a small host-side
+  client). Tools are available to the prime and to sub-clippies, in sandbox and build
+  mode. Declare servers under `mcp.servers` in config; the tools are trusted wholesale
+  (no consent cards).
 
 ---
 
@@ -261,8 +266,70 @@ wayfinder/           ticket index + map (how the demo got built)
 ## Configuration
 
 Config is merged from `clippy/config.json` (defaults) and `~/.clippy/config.json` (user
-override, wins). Keys cover the avatar's idle/mood animation pools, mood hints, and the
-`skills.allow` list.
+override, wins). Keys cover the avatar's idle/mood animation pools, mood hints, the
+`skills.allow` list, and `mcp.servers`.
+
+### MCP servers
+
+Pi has no built-in MCP, so Clippy bridges stdio MCP servers into Pi as custom tools.
+Declare them in `~/.clippy/config.json` (deep-merged over the empty default):
+
+```json
+"mcp": {
+  "servers": {
+    "personal-assistant": {
+      "command": ["uv", "run", "--directory", "/path/to/server", "my-mcp"],
+      "env": {},
+      "prefix": "",
+      "tools": []
+    }
+  }
+}
+```
+
+- `command` — argv to launch the server (stdio).
+- `prefix` — prepended to each tool name (default `""`; use it when two servers share a
+  name, or to match a skill's documented names).
+- `tools` — optional; when empty Clippy queries the server's `tools/list` (cached) to build
+  the sandbox allowlist.
+- Tools are exposed to the prime and to sub-clippies, in sandbox and build mode, and are
+  **trusted wholesale** — no consent cards.
+
+### Inference providers
+
+Providers are owned by **Pi**, not Clippy. Add a provider in Pi's config
+(`~/.pi/agent/models.json`) — any OpenAI-compatible endpoint works:
+
+```json
+{
+  "providers": {
+    "mammouth": {
+      "name": "Mammouth",
+      "baseUrl": "https://api.mammouth.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "$MAMMOUTH_API_KEY",
+      "models": [{ "id": "deepseek-v4-flash" }]
+    }
+  }
+}
+```
+
+Put the key in `~/.clippy/secrets.json` (a flat env map, loaded into the environment for
+Pi — keep it out of the repo), or in Pi's `auth.json` / your shell env:
+
+```json
+{ "MAMMOUTH_API_KEY": "sk-…" }
+```
+
+Then pick the model in Clippy's config (or `--model`):
+
+```json
+{ "model": "mammouth/deepseek-v4-flash" }
+```
+
+`providers.ready` lists the provider prefixes that make Clippy use real Pi instead of the
+mock (default `omlx`, `opencode`, `mammouth`). See [models.md] in the Pi package for the
+full provider/model schema.
 
 Roots of truth (all honour the optional `CLIPPY_HOME` env override for hermetic/headless
 runs — default `~/.clippy`):
@@ -325,6 +392,10 @@ CLIPPY_HOME="$(mktemp -d)" .venv/bin/python -m clippy.brain --mock
   Suggest / Dismiss. Because the worker is a one-shot `--mode json` process it cannot
   ask mid-run, so an Allow is scoped to that worker's whole run — effectively
   arbitrary code execution until it finishes.
+- **MCP tools are trusted wholesale.** Configured MCP servers' tools are exposed
+  to the prime and sub-clippies in every mode and auto-allowed at the build-mode
+  gate — including destructive ones. The MCP server is treated as the guardrail;
+  only configure servers you trust.
 - **Shell speech bubble is non-visual.** `ClippyShell.set_bubble` records the
   brain's status line but the avatar window does not draw it; the live bubble is
   in the chat pane. See [`docs/remediation-plan.md`](docs/remediation-plan.md).

@@ -27,6 +27,9 @@ LOGS_DIR = CLIPPY_ROOT / "logs"
 MEMORY_DIR = CLIPPY_ROOT / "memory"
 MEMORY_INDEX = MEMORY_DIR / "INDEX.md"
 USER_CONFIG = CLIPPY_ROOT / "config.json"
+#: Provider secrets (flat JSON of env vars, e.g. MAMMOUTH_API_KEY). Kept out of
+#: the repo and the config file; loaded into the environment for Pi.
+SECRETS_FILE = CLIPPY_ROOT / "secrets.json"
 SCHEDULER_FILE = CLIPPY_ROOT / "scheduler.jsonl"
 
 #: Repo-internal locations (read-only; independent of CLIPPY_HOME).

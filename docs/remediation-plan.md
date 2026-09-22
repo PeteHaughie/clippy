@@ -131,13 +131,52 @@ Notes:
 - The pane was **not** touched (it was already correct); `_visible_rect` now
   feeds it a real work area, which only affects edge clamping.
 
+## Phase 8 — MCP bridge (stdio servers as Pi tools)
+
+Pi 0.85.x has no built-in MCP (`usage.md` says so explicitly), so MCP needs a
+bridge. Clippy bridges configured stdio MCP servers into Pi as custom tools.
+
+| # | Issue | Fix | Verify |
+|---|---|---|---|
+| 8.1 | No way to use an MCP server | `clippy/extensions/clippy-mcp.ts` + hand-rolled `mcp-client.js` (newline-delimited JSON-RPC 2.0, no npm): on `session_start` spawn/handshake/`tools/list`/`registerTool`, kill on `session_shutdown`, no-op when unset | `tests/test_mcp_client.mjs` |
+| 8.2 | Need tool names before spawn (sandbox `--tools`) | `clippy/mcp.py` reads `mcp.servers`, queries `tools/list` (cached) or uses the config list, emits `CLIPPY_MCP_SERVERS` + the flat name list | `tests/test_mcp.py` |
+| 8.3 | Prime and workers both | `PiBrain`/`PiSubAgent` gain `env=` (+ `extensions=`); `_brain_kwargs`/`_spawn_worker` add the bridge + env + names | `tests/test_mcp.py` |
+| 8.4 | Trust model | Trusted wholesale: sandbox `--tools` includes the names; build auto-allows them via `CLIPPY_GATE_ALLOW` | unit + end-to-end |
+| 8.5 | Naming | Bare names by default (matches the `personal-assistant-mcp` skill's documented tools); optional per-server `prefix` | `tests/test_mcp.py` |
+
+Verified end-to-end against the real `personal-assistant` server: the bridge
+registers 23 tools and they appear active under
+`--tools read,grep,find,ls,<names>`.
+
+Notes:
+- `--tools` accepts extension/custom tool names (spike-confirmed), so sandbox can
+  enable the MCP tools alongside the read-only built-ins.
+- Accepted risk (user decision): MCP tools are trusted wholesale, including
+  destructive ones, and are available in sandbox — the server is the guardrail.
+
+## Phase 9 — Inference providers
+
+Pi owns providers; Clippy just needs to point at one and supply keys. No new
+provider machinery — Pi's `models.json` covers any OpenAI-compatible endpoint.
+
+| # | Issue | Fix | Verify |
+|---|---|---|---|
+| 9.1 | Keys in config/tracked files | `clippy/secrets.py` loads `~/.clippy/secrets.json` into the environment (Pi resolves `$ENV_VAR` from `models.json`); applied before `pi_ready` and every spawn | `tests/test_providers.py` |
+| 9.2 | Default model hard-coded | Clippy config `model` (else `--model`, else built-in) via `resolve_model()` | `tests/test_providers.py` |
+| 9.3 | `pi_ready()` only knew `omlx`/`opencode` | configurable `providers.ready` (default now includes `mammouth`) | `tests/test_providers.py` |
+
+Configured Mammouth (`~/.pi/agent/models.json`, 93 models, `apiKey:
+"$MAMMOUTH_API_KEY"`) + `~/.clippy/secrets.json`; verified with
+`pi --list-models mammouth` and a live `mammouth/deepseek-v4-flash` completion.
+
 ## Result
 
 All items implemented. Verification:
 
 ```
-.venv/bin/python -m unittest discover -s tests   # 75 tests, OK
+.venv/bin/python -m unittest discover -s tests   # 92 tests, OK
 node --test tests/test_sanitize.mjs              # 3 tests, OK
+node --test tests/test_mcp_client.mjs            # 2 tests, OK
 .venv/bin/python -m py_compile clippy/*.py main.py
 CLIPPY_HOME=$(mktemp -d) .venv/bin/python -m clippy.brain --mock   # SETTLED
 ```

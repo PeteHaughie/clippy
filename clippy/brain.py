@@ -98,6 +98,7 @@ class PiBrain(Brain):
         cwd: Path | None = None,
         no_session: bool = True,
         thinking: bool | None = None,
+        env: dict | None = None,
     ):
         self.model = model
         self.system_prompt = system_prompt
@@ -109,6 +110,9 @@ class PiBrain(Brain):
         self.cwd = cwd or make_scratch_dir()
         self.no_session = no_session
         self.thinking = thinking
+        #: Extra environment for the Pi process (e.g. CLIPPY_MCP_SERVERS),
+        #: layered over the inherited environment.
+        self.env = env or {}
         self._q: queue.Queue = queue.Queue()
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
@@ -161,6 +165,7 @@ class PiBrain(Brain):
                 stderr=stderr_fh,
                 text=True,
                 bufsize=1,
+                env={**os.environ, **self.env} if self.env else None,
             )
         except OSError:
             # Don't leak the log/transcript handles when the process can't start.

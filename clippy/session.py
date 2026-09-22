@@ -22,6 +22,7 @@ from pathlib import Path
 import pyglet
 
 from .brain import DEFAULT_MODEL, MockBrain, PiBrain
+from .config import load_config
 from .controller import SubClippyController
 from .memory import ensure_memory, resolve_skill_paths
 from .model import Delegation, MoveSpec, build_session_graph, required_topology
@@ -39,7 +40,7 @@ from .subagent import (
     parse_move_spec,
     pi_ready,
 )
-from . import screens
+from . import mcp, screens
 from .notify import notify
 from .scheduler import parse_notify, parse_schedule, parse_trigger
 from .timeutil import humanize, time_header
@@ -53,6 +54,10 @@ ESCALATED_TOOLS = ["read", "grep", "find", "ls", "bash", "write", "edit"]
 #: Build-mode consent gate extension (016): asks before mutating tools.
 GATE_EXT = str(
     Path(__file__).resolve().parent / "extensions" / "clippy-gate.ts"
+)
+#: MCP bridge extension: registers configured stdio MCP servers' tools with Pi.
+MCP_EXT = str(
+    Path(__file__).resolve().parent / "extensions" / "clippy-mcp.ts"
 )
 
 #: Reliable chat commands the user types in the pane (host-intercepted, like
@@ -116,6 +121,12 @@ def command_matches(low: str, cmd: str) -> bool:
     return low == cmd or low.startswith(cmd + " ")
 
 
+def resolve_model(model: str | None = None) -> str:
+    """The default model: an explicit ``--model``, else config ``model``, else
+    the built-in default."""
+    return model or (load_config().get("model") or DEFAULT_MODEL)
+
+
 def resolve_worker_tools(delegation_tools, caller_tools) -> tuple:
     """Resolve a worker's tool allowlist, never falling through to "all tools".
 
@@ -127,9 +138,15 @@ def resolve_worker_tools(delegation_tools, caller_tools) -> tuple:
 
 
 class Session:
-    def __init__(self, shell, model: str = DEFAULT_MODEL, real: bool = False):
+    def __init__(self, shell, model: str | None = None, real: bool = False):
+        # Provider keys from ~/.clippy/secrets.json go into the environment so
+        # Pi (and the pi_ready probe) can resolve them.
+        from .secrets import apply_to_environ
+
+        apply_to_environ()
+
         self.shell = shell
-        self.model = model
+        self.model = resolve_model(model)
         self.real = real
         self.mode = "sandbox"
         self.brain = None
@@ -338,12 +355,34 @@ class Session:
 
     # --------------------------------------------------------------- prime
 
+    def _mcp_servers(self) -> list[dict]:
+        """Configured MCP servers (empty when none). Tool names are resolved
+        lazily/cached by :mod:`clippy.mcp`."""
+        try:
+            return mcp.load_servers(load_config())
+        except Exception:
+            return []
+
+    def _mcp_env(self, servers: list[dict]) -> dict:
+        env = {"CLIPPY_MCP_SERVERS": mcp.extension_env(servers)}
+        if self.mode != "sandbox":
+            # Trusted wholesale: the MCP tools are auto-allowed at the gate.
+            allow = ["read", "grep", "find", "ls", "search"]
+            allow += mcp.exposed_tool_names(servers)
+            env["CLIPPY_GATE_ALLOW"] = ",".join(allow)
+        return env
+
     def _brain_kwargs(self) -> dict:
         kwargs = {"model": self.model}
+        servers = self._mcp_servers()
+        mcp_names = mcp.exposed_tool_names(servers) if servers else []
         if self.mode == "sandbox":
-            kwargs["tools"] = SANDBOX_TOOLS
+            kwargs["tools"] = SANDBOX_TOOLS + mcp_names
         else:
             kwargs["extensions"] = [GATE_EXT]
+        if servers:
+            kwargs.setdefault("extensions", []).append(MCP_EXT)
+            kwargs["env"] = self._mcp_env(servers)
         kwargs["append_system_prompt"] = ensure_memory()
         kwargs["skills"] = resolve_skill_paths()
         return kwargs
@@ -1105,7 +1144,13 @@ class Session:
         model = task.model or self.model
         # Workers are sandboxed by default: the delegation's tools, else the
         # caller's, else the standard read/search sandbox — never Pi's full set.
-        tools = resolve_worker_tools(task.tools, tools)
+        tools = list(resolve_worker_tools(task.tools, tools))
+        # Workers get the same MCP tools as the prime (trusted wholesale).
+        servers = self._mcp_servers()
+        mcp_names = mcp.exposed_tool_names(servers) if servers else []
+        tools += mcp_names
+        worker_ext = [MCP_EXT] if servers else []
+        worker_env = {"CLIPPY_MCP_SERVERS": mcp.extension_env(servers)} if servers else {}
         if self.real or pi_ready():
             # Workers learn the notify + schedule protocols (emit
             # [CLIPPY::NOTIFY] / [CLIPPY::SCHEDULE]) so a delegated task can
@@ -1118,6 +1163,8 @@ class Session:
                     str(SKILLS_DIR / "notify"),
                     str(SKILLS_DIR / "schedule"),
                 ],
+                extensions=worker_ext,
+                env=worker_env,
             )
             label = f"PI sub-agent ({model})"
         else:

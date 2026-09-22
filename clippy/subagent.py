@@ -12,6 +12,7 @@ Two implementations of the :class:`SubAgent` interface:
 
 import datetime
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -189,10 +190,31 @@ def pi_ready(refresh: bool = False) -> bool:
     return _pi_ready_cache
 
 
+#: Provider prefixes treated as "real" when deciding to use Pi over the mock.
+#: Override with ``providers.ready`` in config.
+DEFAULT_READY_PROVIDERS = ("omlx", "opencode", "mammouth")
+
+
+def _ready_providers() -> tuple[str, ...]:
+    try:
+        from .config import load_config
+
+        ready = (load_config().get("providers") or {}).get("ready")
+        if ready:
+            return tuple(str(p) for p in ready)
+    except Exception:
+        pass
+    return DEFAULT_READY_PROVIDERS
+
+
 def _probe_pi_ready() -> bool:
     if shutil.which("pi") is None:
         return False
     try:
+        # Provider keys may live in ~/.clippy/secrets.json.
+        from .secrets import apply_to_environ
+
+        apply_to_environ()
         out = subprocess.run(
             ["pi", "--list-models"],
             capture_output=True,
@@ -201,9 +223,8 @@ def _probe_pi_ready() -> bool:
         ).stdout
     except (subprocess.SubprocessError, OSError):
         return False
-    return any(
-        line.startswith(("omlx", "opencode")) for line in out.splitlines()
-    )
+    prefixes = _ready_providers()
+    return any(line.startswith(prefixes) for line in out.splitlines())
 
 
 class PiSubAgent(SubAgent):
@@ -218,6 +239,8 @@ class PiSubAgent(SubAgent):
         cwd: Path | None = None,
         tools: list[str] | None = None,
         skills: list[str] | None = None,
+        extensions: list[str] | None = None,
+        env: dict | None = None,
     ):
         self.task = task
         self.system_prompt = system_prompt
@@ -234,6 +257,10 @@ class PiSubAgent(SubAgent):
             )
         self.tools = tools
         self.skills = skills
+        #: Extra `-e` extensions (e.g. the MCP bridge) and environment
+        #: (CLIPPY_MCP_SERVERS) for the worker process.
+        self.extensions = extensions or []
+        self.env = env or {}
         self._q: queue.Queue = queue.Queue()
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
@@ -262,6 +289,8 @@ class PiSubAgent(SubAgent):
             cmd += ["--no-skills"]
             for skill in self.skills:
                 cmd += ["--skill", str(skill)]
+        for ext in self.extensions:
+            cmd += ["-e", str(ext)]
         cmd += [self.task]
         return cmd
 
@@ -275,6 +304,7 @@ class PiSubAgent(SubAgent):
             stdout=subprocess.PIPE,
             stderr=stderr_fh,
             text=True,
+            env={**os.environ, **self.env} if self.env else None,
         )
         self.cwd.joinpath("subagent.cmd").write_text(" ".join(cmd) + "\n")
         self._thread = threading.Thread(

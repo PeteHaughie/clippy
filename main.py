@@ -50,7 +50,7 @@ import pyglet
 from clippy.moods import Moods
 from clippy.session import Session
 from clippy.shell import ClippyShell
-from clippy.subagent import DEFAULT_MODEL, DEFAULT_TASK
+from clippy.subagent import DEFAULT_TASK
 
 ONE_SHOT_HOLD = 1.5  # seconds after a one-shot mood before moving on
 
@@ -126,7 +126,11 @@ def main() -> int:
     parser.add_argument("--delegate", nargs="?", const=DEFAULT_TASK, help="summon a sub-clippy for this task at startup (default task when omitted)")
     parser.add_argument("--brain", nargs="?", const="", help="start the prime Pi brain (RPC) and give it this opening prompt (default greeting when omitted)")
     parser.add_argument("--real", action="store_true", help="force the real Pi sub-agent")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="model for the real Pi brain/sub-agent")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="model for the real Pi brain/sub-agent (default: config 'model', else built-in)",
+    )
     args = parser.parse_args()
 
     shell = PrimeShell(scale=args.scale, live_key=not args.no_shader, position=PRIME_POS)
