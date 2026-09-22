@@ -491,6 +491,31 @@
     }
     if (m === 'confirm') {
       dialogButtons(card, ['Allow', 'Deny'], true);
+    } else if (m === 'review') {
+      // Clippy-originated: how should a sub-clippy run? Allow = command access,
+      // Read-only = sandbox, Suggest = sandbox + guidance, Dismiss = don't run.
+      const ta = document.createElement('textarea');
+      ta.style.cssText = 'width:100%;height:64px;box-sizing:border-box;'
+        + 'font:12px/1.3 monospace;';
+      ta.placeholder = event.placeholder || 'Optional guidance for the sub-clippy…';
+      addField(card, ta);
+      const row = document.createElement('div');
+      row.className = 'dialog-buttons';
+      const choose = (label, makePayload) => {
+        const b = document.createElement('w1c-button');
+        b.textContent = label;
+        b.addEventListener('click', () => {
+          row.querySelectorAll('w1c-button').forEach((x) => { x.disabled = true; });
+          const payload = typeof makePayload === 'function' ? makePayload() : makePayload;
+          post('ui_response', Object.assign({ id: card.dataset.id }, payload));
+        });
+        row.appendChild(b);
+      };
+      choose('Allow', { decision: 'allow' });
+      choose('Read-only', { decision: 'deny' });
+      choose('Suggest', () => ({ decision: 'suggest', suggestion: ta.value }));
+      choose('Dismiss', { decision: 'dismiss' });
+      card.appendChild(row);
     } else if (m === 'select') {
       const sel = document.createElement('w1c-select');
       (event.options || []).forEach((opt) => {

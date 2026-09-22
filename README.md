@@ -60,7 +60,11 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
   (read-only tools) limits them to reading.
 - **Sub-clippy delegation** — `/delegate <task>` (or an autonomous `[CLIPPY::DELEGATE]`
   directive) spawns a separate one-shot Pi sub-agent in its own floating shell that works,
-  reports back, celebrates and **explodes** on completion.
+  reports back, celebrates and **explodes** on completion. Workers are read/search-only by
+  default; in **build mode** the host asks how a delegation should run (Allow commands /
+  Read-only / Suggest / Dismiss) before spawning. `/delegate --allow <task>` requests the
+  same card in any mode. The grant is per delegation — an allowed worker can run any command
+  for its run.
 - **Position API** — Clippy knows where he is on screen and can be moved by you (`/move`,
   drag) or by the brain (`[CLIPPY::MOVE]`).
 
@@ -202,7 +206,8 @@ scratch dir are all created/used on demand. See [Configuration](#configuration).
 |---|---|
 | `/move <spot>` or `/move <x> <y>` | Move Clippy (spots: `top-left`, `center`, …) |
 | `/where` | Report Clippy's current position |
-| `/delegate <task>` | Spawn a sandboxed sub-clippy for the task |
+| `/delegate <task>` | Spawn a sub-clippy for the task (build mode asks how it may run) |
+| `/delegate --allow <task>` | Request command access for the worker (host asks for consent) |
 
 The brain can also move Clippy itself via a `[CLIPPY::MOVE]` directive, and delegate via a
 `[CLIPPY::DELEGATE] … [CLIPPY::END]` block (the `sub-clippy` composition skill).
@@ -309,8 +314,12 @@ CLIPPY_HOME="$(mktemp -d)" .venv/bin/python -m clippy.brain --mock
 - **Build-mode gate is an allowlist.** Every tool not on the read-only allowlist
   (`CLIPPY_GATE_ALLOW`, default `read,grep,find,ls,search`) raises a consent card,
   and is blocked outright when there is no UI.
-- **Worker delegation is sandboxed.** A sub-clippy always gets an explicit tool
-  allowlist (read/search); it can never inherit Pi's full tool set.
+- **Worker delegation is read-only by default.** A sub-clippy gets an explicit
+  read/search allowlist unless you consent to escalation. In build mode (or via
+  `/delegate --allow` / the elevated directive) the host asks Allow / Read-only /
+  Suggest / Dismiss. Because the worker is a one-shot `--mode json` process it cannot
+  ask mid-run, so an Allow is scoped to that worker's whole run — effectively
+  arbitrary code execution until it finishes.
 - **Shell speech bubble is non-visual.** `ClippyShell.set_bubble` records the
   brain's status line but the avatar window does not draw it; the live bubble is
   in the chat pane. See [`docs/remediation-plan.md`](docs/remediation-plan.md).

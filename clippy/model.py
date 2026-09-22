@@ -453,7 +453,7 @@ SESSION_CONSTRAINTS: list[tuple[str, str, tuple]] = [
     # name, expr, provenance
     ("sandbox", "mode==sandbox ⇒ prime.tools=={read,grep,find,ls} ∧ ¬consent_gate", ("005", "017")),
     ("build", "mode==build ⇒ prime.tools==full ∧ consent_gate", ("005", "016")),
-    ("worker_sandbox", "worker.tools=={read,grep,find,ls} (invariant)", ("019",)),
+    ("worker_sandbox", "worker.tools=={read,grep,find,ls} unless a user-granted escalation (per worker run)", ("019",)),
     ("single_worker", "exactly-one active worker at a time (else task dropped)", ("004", "019")),
     ("gate_fail_closed", "consent_gate refuses tool when ¬hasUI", ("016",)),
     ("respawn_on_toggle", "mode toggle ⇒ respawn prime (Pi fixes tools at spawn)", ("005", "017")),

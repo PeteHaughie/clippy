@@ -32,6 +32,9 @@ SUB_SANDBOX_TOOLS = SANDBOX_TOOLS
 #: The composition-skill directive (clippy/skills/sub-clippy): the prime ends
 #: its reply with a [CLIPPY::DELEGATE] block; the host turns it into a worker.
 DELEGATE_OPEN = "[CLIPPY::DELEGATE]"
+#: Elevated variant: the prime asks for a worker that may run commands. The host
+#: still asks the user to consent before granting it (never self-approved).
+DELEGATE_ELEVATED_OPEN = "[CLIPPY::DELEGATE::ELEVATED]"
 DELEGATE_CLOSE = "[CLIPPY::END]"
 #: Reliable chat command the user types in the pane: ``/delegate <task>``. The
 #: host intercepts it directly (no model compliance needed for the demo path).
@@ -58,23 +61,30 @@ def extract_directive(text: str, open_marker: str, close_marker: str = "[CLIPPY:
     return start, end, end
 
 
-def parse_delegation(text: str) -> tuple[str, str | None]:
-    """Return ``(clean_text, task)`` for an assistant reply.
+def parse_delegation(text: str) -> tuple[str, str | None, bool]:
+    """Return ``(clean_text, task, elevated)`` for an assistant reply.
 
     If the reply carries a ``[CLIPPY::DELEGATE] … [CLIPPY::END]`` block, ``task``
     is its (stripped) content and the block is removed from ``clean_text``. The
+    ``[CLIPPY::DELEGATE::ELEVATED]`` variant sets ``elevated=True`` — the worker
+    is being requested with command access, which the host consent-gates. The
     close marker is optional (the block then runs to the end of its line).
-    Without a block, ``(text, None)``.
+    Without a block, ``(text, None, False)``.
     """
     if not text:
-        return "", None
-    span = extract_directive(text, DELEGATE_OPEN)
+        return "", None, False
+    open_marker = DELEGATE_OPEN
+    elevated = False
+    if DELEGATE_ELEVATED_OPEN in text:
+        open_marker = DELEGATE_ELEVATED_OPEN
+        elevated = True
+    span = extract_directive(text, open_marker)
     if span is None:
-        return text, None
+        return text, None, False
     start, body_end, clean_end = span
-    task = text[start + len(DELEGATE_OPEN):body_end].strip()
+    task = text[start + len(open_marker):body_end].strip()
     clean = (text[:start] + text[clean_end:]).strip()
-    return clean, (task or None)
+    return clean, (task or None), elevated
 
 #: The movement directive (clippy/skills/move): the brain ends its reply with
 #: a [CLIPPY::MOVE] block to move Clippy on screen; the host turns it into a

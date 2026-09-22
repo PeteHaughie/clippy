@@ -225,6 +225,9 @@ if sys.platform == "darwin":
     class Pane(_JsMixin):
         """Transparent floating WKWebView panel rendering the w1c chat pane."""
 
+        #: Can raise and answer Clippy-originated consent cards.
+        can_confirm = True
+
         def __init__(self, shell, mode: str = "active"):
             self.shell = shell
             self.mode = mode
@@ -233,6 +236,11 @@ if sys.platform == "darwin":
             self.bridge = None
             self.navdelegate = None
             self._loaded = False
+            #: JS queued before the webview finished loading, flushed on load
+            #: (mirrors the Linux backend). Without this, an early
+            #: ``__addMessage``/consent card posted right after summon would be
+            #: silently dropped — evaluateJavaScript is a no-op pre-load.
+            self._pending: list[str] = []
             #: Callbacks set by the app.
             self.on_chat = None          # on_chat(text) — user typed in the pane
             self.on_ui_response = None   # on_ui_response(id, payload) — dialog answered
@@ -308,6 +316,9 @@ if sys.platform == "darwin":
 
         def _on_webview_loaded(self):
             self._loaded = True
+            pending, self._pending = self._pending, []
+            for js in pending:
+                self._evaluate(js)
             self._evaluate("window.__focusInput();")
 
         # -------------------------------------------------------------- bridge
@@ -450,7 +461,10 @@ if sys.platform == "darwin":
             self._anchor_shell = self.shell.get_location()
 
         def _evaluate(self, js):
-            if self.webview is None or not self._loaded:
+            if self.webview is None:
+                return
+            if not self._loaded:
+                self._pending.append(js)
                 return
 
             def _done(result, error):
@@ -583,6 +597,8 @@ else:
         has nowhere to render the chat chart."""
 
         wants_integrated_loop = False
+        #: No webview → no way to ask the user, so no consent-gated escalation.
+        can_confirm = False
 
         def __init__(self, shell, mode: str = "active"):
             self.shell = shell
@@ -657,6 +673,8 @@ else:
 
             #: Tells main.py to run the integrated pyglet+GTK loop (--brain only).
             wants_integrated_loop = True
+            #: Can raise and answer Clippy-originated consent cards.
+            can_confirm = True
             MIN_PANE_W, MIN_PANE_H = MIN_PANE_W, MIN_PANE_H
 
             def __init__(self, shell, mode: str = "active"):

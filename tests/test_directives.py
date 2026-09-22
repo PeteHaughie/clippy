@@ -8,24 +8,42 @@ from clippy.subagent import parse_delegation, parse_move
 
 class DelegationTests(unittest.TestCase):
     def test_with_close_marker(self):
-        clean, task = parse_delegation("Before [CLIPPY::DELEGATE] do X [CLIPPY::END] after")
+        clean, task, elevated = parse_delegation("Before [CLIPPY::DELEGATE] do X [CLIPPY::END] after")
         self.assertEqual(task, "do X")
+        self.assertFalse(elevated)
         self.assertNotIn("CLIPPY", clean)
         self.assertIn("Before", clean)
         self.assertIn("after", clean)
 
     def test_without_close_marker_delegates_to_end_of_line(self):
-        clean, task = parse_delegation("Before\n[CLIPPY::DELEGATE] do X\nSome trailing text")
+        clean, task, elevated = parse_delegation("Before\n[CLIPPY::DELEGATE] do X\nSome trailing text")
         self.assertEqual(task, "do X")
+        self.assertFalse(elevated)
         self.assertNotIn("CLIPPY::DELEGATE", clean)
         self.assertIn("Some trailing text", clean)
 
     def test_no_block(self):
-        self.assertEqual(parse_delegation("just text"), ("just text", None))
+        self.assertEqual(parse_delegation("just text"), ("just text", None, False))
 
     def test_empty_task_is_none(self):
-        clean, task = parse_delegation("[CLIPPY::DELEGATE][CLIPPY::END]")
+        clean, task, elevated = parse_delegation("[CLIPPY::DELEGATE][CLIPPY::END]")
         self.assertIsNone(task)
+        self.assertFalse(elevated)
+
+    def test_elevated_variant_sets_flag(self):
+        clean, task, elevated = parse_delegation(
+            "[CLIPPY::DELEGATE::ELEVATED] run a script [CLIPPY::END]"
+        )
+        self.assertTrue(elevated)
+        self.assertEqual(task, "run a script")
+        self.assertNotIn("CLIPPY", clean)
+
+    def test_elevated_without_close(self):
+        clean, task, elevated = parse_delegation(
+            "ok\n[CLIPPY::DELEGATE::ELEVATED] run it"
+        )
+        self.assertTrue(elevated)
+        self.assertEqual(task, "run it")
 
 
 class MoveTests(unittest.TestCase):

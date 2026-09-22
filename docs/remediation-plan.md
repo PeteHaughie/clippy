@@ -86,12 +86,34 @@ node --test tests/test_sanitize.mjs
 | 5.17 | Shell `set_bubble`/`mode`/`dialog_pending` are never rendered (`shell.py:176-178`) | Document as non-visual (pane owns the live bubble); fix README | review |
 | 5.18 | README claims a Node DOM-shim test and a shell speech/status line; curator boundary is a soft risk | Correct docs; note accepted risks (soft `~/.clippy/memory` boundary; default-on transcripts) | review |
 
+## Phase 6 — Consent-gated worker escalation (Option A)
+
+A follow-up gap: in build mode, delegating a task that needs `bash` simply
+failed — workers are hard-sandboxed regardless of mode and run as one-shot
+`pi --mode json -p` processes where `ctx.hasUI === false`, so a gate can only
+block, never ask. There was no way to grant a worker command access.
+
+Chosen fix (Option A — per-delegation grant):
+
+| # | Issue | Fix | Verify |
+|---|---|---|---|
+| 6.1 | Workers are always read-only; no consent path | Host raises a `review` card (Allow / Read-only / Suggest / Dismiss) before spawning in build mode; `/delegate --allow` and `[CLIPPY::DELEGATE::ELEVATED]` request it in any mode | `tests/test_delegation_consent.py` |
+| 6.2 | Clippy-originated cards can't be resolved (`ui_response` always forwards to the prime) | Host-dialog registry (`_host_dialogs`, `host-` ids) resolved locally in `ui_response`; also fixes `/test card` | routing tests |
+| 6.3 | Missed prompts when away | Summon the pane and post an OS notification when a card is raised; **no auto-deny** (waits indefinitely) | unit + manual |
+| 6.4 | Policy/docs said workers never mutate | Relax `worker_sandbox` constraint; update `sub-clippy` skill + README | review |
+
+Scope and accepted risk: the grant is **per delegation/run**, not per command —
+once allowed, the worker can run any command until it finishes (granting `bash`
+makes the tool list cosmetic). `Suggest` runs read-only with the user's guidance
+appended; `Dismiss` spawns nothing; no confirmable pane (NullPane) fails safe to
+read-only. The prime can *request* escalation but never grants it — only the user does.
+
 ## Result
 
 All items implemented. Verification:
 
 ```
-.venv/bin/python -m unittest discover -s tests   # 45 tests, OK
+.venv/bin/python -m unittest discover -s tests   # 58 tests, OK
 node --test tests/test_sanitize.mjs              # 3 tests, OK
 .venv/bin/python -m py_compile clippy/*.py main.py
 CLIPPY_HOME=$(mktemp -d) .venv/bin/python -m clippy.brain --mock   # SETTLED
@@ -119,3 +141,7 @@ Notes on the choices made while implementing:
   avatar-window layout work.
 - The memory curator's `~/.clippy/memory/` boundary remains prompt-enforced; a
   filesystem sandbox would be the real fix.
+- **Per-command consent** (Options B/C from the review discussion): an interactive
+  `--mode rpc` worker with the gate, or host-mediated execution where the worker
+  stays read-only and the host runs approved commands. Option A's per-delegation
+  grant is the accepted trade-off for now.

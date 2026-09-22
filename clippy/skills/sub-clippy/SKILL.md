@@ -31,9 +31,15 @@ Do NOT delegate when:
 
 - The answer is quick and you can give it now.
 - The task needs your current context, your approvals, or the user's input.
-- The task **writes, installs, or mutates anything** — a sub-clippy is
-  sandboxed read/search-only. Never ask it to create files or run mutating
-  commands.
+- The task **writes, installs, or mutates anything** and you are in **sandbox**
+  mode — a sandboxed sub-clippy is read/search-only. Never ask it to create
+  files or run mutating commands in sandbox mode.
+
+In **build** mode a worker may be granted command access, but only the user can
+grant it: you request it, the host shows them an Allow / Read-only / Suggest /
+Dismiss card, and the worker runs read-only unless they Allow. Use the elevated
+directive below when — and only when — the task genuinely needs to run or write
+something.
 
 ## How to delegate
 
@@ -59,6 +65,15 @@ one block per reply.
 
 ```
 [CLIPPY::DELEGATE]
+<Task description. Self-contained: goal, inputs, expected report.>
+[CLIPPY::END]
+```
+
+If the task needs to run commands or write files (build mode only), use the
+elevated form — the host will ask the user for consent before granting it:
+
+```
+[CLIPPY::DELEGATE::ELEVATED]
 <Task description. Self-contained: goal, inputs, expected report.>
 [CLIPPY::END]
 ```

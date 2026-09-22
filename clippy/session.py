@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime
 import queue
+import uuid
 from pathlib import Path
 
 import pyglet
@@ -41,6 +42,12 @@ from .notify import notify
 from .scheduler import parse_notify, parse_schedule, parse_trigger
 from .timeutil import humanize, time_header
 
+#: Full mutating tool set a worker gets when the user consents to escalation.
+#: Once ``bash`` is granted the worker can reach the rest of the machine anyway
+#: (``cat >``, ``sed -i``, ``python -c`` …), so the extra tools are idiomatic
+#: convenience, not a finer-grained boundary — consent is effectively "arbitrary
+#: code execution for this worker's run".
+ESCALATED_TOOLS = ["read", "grep", "find", "ls", "bash", "write", "edit"]
 #: Build-mode consent gate extension (016): asks before mutating tools.
 GATE_EXT = str(
     Path(__file__).resolve().parent / "extensions" / "clippy-gate.ts"
@@ -75,7 +82,9 @@ HELP_TEXT = (
     "`/mood GestureRight`), and `/mood idle <animation>` pins a specific "
     "idle animation\n"
     "- `/delegate <task>` — hand a self-contained task to a sub-clippy worker\n"
-    "  and it reports back (e.g. `/delegate count the markdown files`)\n"
+    "  and it reports back (e.g. `/delegate count the markdown files`). In\n"
+    "  build mode I'll ask whether it may run commands; `/delegate --allow\n"
+    "  <task>` asks for command access in any mode (you still approve it).\n"
     "- `/move <spot>` or `/move <x> <y>` — move me on screen (spots: "
     "top-left / top-right / bottom-left / bottom-right / center / left / "
     "right / top / bottom)\n"
@@ -150,6 +159,10 @@ class Session:
         self._memory_batch: list[tuple[str, str]] = []   # (user_text, answer)
         self._pending_user_text: str | None = None       # latest user message awaiting an answer
         self._curator_busy = False
+        #: Clippy-originated dialogs (ids prefixed ``host-``) awaiting a pane
+        #: answer: id → callback(payload). Resolved by ``ui_response`` locally
+        #: instead of being forwarded to the prime brain.
+        self._host_dialogs: dict = {}
 
         self.pane = Pane(shell)
         shell.pane = self.pane
@@ -406,12 +419,18 @@ class Session:
             return
         if command_matches(low, DELEGATE_CMD):
             task = stripped[len(DELEGATE_CMD):].strip()
+            # `/delegate --allow <task>` explicitly asks for a command-capable
+            # worker (the host still asks for consent before granting it).
+            elevated = False
+            if task.lower().startswith("--allow"):
+                elevated = True
+                task = task[len("--allow"):].strip()
             if not task:
                 self.pane.add_message(
                     "clippy", "What should the sub-clippy do? e.g. `/delegate count the markdown files`"
                 )
                 return
-            self._start_delegation(task)
+            self._start_delegation(task, elevated=elevated)
             return
         if stripped.startswith("/"):
             # Unknown slash command. Don't forward it to the brain: it would be
@@ -804,7 +823,39 @@ class Session:
             "clippy", "Diagnostics: try `/test card [confirm|select|input|editor|notify]`."
         )
 
+    def _host_dialog(self, method: str, title: str, message: str, on_result) -> str:
+        """Ask the user through a pane card; resolve ``on_result(payload)`` later.
+
+        Used for Clippy-originated questions (worker escalation) that are not
+        Pi's own ``extension_ui_request``s. The pane is summoned and an OS
+        notification posted so the card is not missed, and there is deliberately
+        **no timeout** — the card waits until the user answers (or never).
+        """
+        from .model import UiRequest
+
+        rid = f"host-{uuid.uuid4().hex[:8]}"
+        self._host_dialogs[rid] = on_result
+        self.shell.dialog_pending = True
+        try:
+            self.pane.summon()
+        except Exception:
+            pass
+        notify("Clippy needs your approval", message[:160])
+        self.pane.ui_request(
+            UiRequest(id=rid, method=method, payload={"title": title, "message": message})
+        )
+        return rid
+
     def ui_response(self, rid, payload: dict):
+        if rid in self._host_dialogs:
+            # A Clippy-originated card: resolve it locally, never forward to Pi.
+            cb = self._host_dialogs.pop(rid)
+            self.shell.dialog_pending = False
+            try:
+                cb(payload)
+            except Exception:
+                self._log_error("host dialog callback")
+            return
         print(
             f"[clippy] ui_response {rid} "
             f"confirmed={payload.get('confirmed')} cancelled={payload.get('cancelled')}",
@@ -826,18 +877,25 @@ class Session:
         Clippy, [CLIPPY::SCHEDULE] schedules a wall-clock notify task, and
         [CLIPPY::NOTIFY] posts an OS notification."""
         print(f"[clippy] answer {len(text)}b", flush=True)
-        clean, task = parse_delegation(text)
+        clean, task, elevated = parse_delegation(text)
         clean, move = parse_move(clean)
         clean, trigger, schedule_what = parse_schedule(clean)
         clean, notify_text = parse_notify(clean)
         if task:
             self.shell.set_bubble("(handing off to a sub-clippy…)")
-            self.delegate(
-                task,
-                tools=SANDBOX_TOOLS,
-                on_complete=self._on_sub_done,
-                source="directive",
-            )
+
+            def _run(tools, guided_task):
+                self.delegate(
+                    guided_task,
+                    tools=tools,
+                    on_complete=self._on_sub_done,
+                    source="directive",
+                )
+
+            if elevated or self.mode == "build":
+                self._confirm_escalation(task, _run)
+            else:
+                _run(SANDBOX_TOOLS, task)
         if move:
             self._run_move(move)
         if trigger and schedule_what:
@@ -1079,20 +1137,78 @@ class Session:
         self.shell.switch_to()
         return ctrl
 
-    def _start_delegation(self, task: str):
-        self.shell.set_bubble("(handing off to a sub-clippy…)")
+    # ------------------------------------------------- delegation escalation
+
+    def _confirm_escalation(self, task: str, on_run):
+        """Ask how a delegation should run, then call ``on_run(tools, task)``.
+
+        ``on_run`` receives ``(ESCALATED_TOOLS | SANDBOX_TOOLS, task)``; on
+        ``suggest`` the task carries the user's guidance, and on ``dismiss``
+        nothing runs. With no confirmable pane (NullPane) this fails safe to
+        read-only.
+        """
+        if not getattr(self.pane, "can_confirm", False):
+            on_run(SANDBOX_TOOLS, task)
+            return
+
+        message = (
+            f"{task}\n\n"
+            "Allow lets this sub-clippy run any command and change files on this "
+            "machine until it finishes. Read-only keeps it to read/search tools. "
+            "Suggest sends your guidance to a read-only worker."
+        )
+
+        def _resolve(payload: dict):
+            decision = (payload or {}).get("decision", "dismiss")
+            if decision == "allow":
+                self.pane.add_message("clippy", "Allowed — running the sub-clippy with command access.")
+                on_run(ESCALATED_TOOLS, task)
+            elif decision == "suggest":
+                suggestion = ((payload or {}).get("suggestion") or "").strip()
+                guided = task + (f"\n\nUser guidance: {suggestion}" if suggestion else "")
+                self.pane.add_message(
+                    "clippy",
+                    f"Guiding the sub-clippy: {suggestion}" if suggestion
+                    else "Running the sub-clippy read-only.",
+                )
+                on_run(SANDBOX_TOOLS, guided)
+            elif decision == "deny":
+                self.pane.add_message("clippy", "Read-only it is.")
+                on_run(SANDBOX_TOOLS, task)
+            else:  # dismiss
+                self.pane.add_message("clippy", "Okay — I won't run that delegation.")
+
+        self._host_dialog("review", "How should this sub-clippy run?", message, _resolve)
+
+    def _spawn_delegation(self, task: str, tools, source: str, on_complete=None) -> bool:
+        """Spawn a worker and report the outcome in the pane. Returns False if
+        a worker is already running."""
         ok = self.delegate(
-            task,
-            tools=SANDBOX_TOOLS,
-            on_complete=self._on_sub_done,
-            source="chat",
+            task, tools=tools, on_complete=on_complete, source=source
         )
         if not ok:
             self.pane.add_message(
                 "clippy", "A sub-clippy is already at work — let it finish first."
             )
-        else:
+            return False
+        self.pane.add_message(
+            "clippy", "Handed that to a sub-clippy — report back shortly."
+        )
+        return True
+
+    def _start_delegation(self, task: str, elevated: bool = False):
+        self.shell.set_bubble("(handing off to a sub-clippy…)")
+
+        def _run(tools, guided_task):
+            if self._spawn_delegation(guided_task, tools, "chat", self._on_sub_done):
+                self.brain.steer(
+                    f"The user delegated this task to a sub-clippy: {guided_task}"
+                )
+
+        if elevated or self.mode == "build":
             self.pane.add_message(
-                "clippy", "Handed that to a sub-clippy — report back shortly."
+                "clippy", "Asking how you'd like the sub-clippy to run…"
             )
-            self.brain.steer(f"The user delegated this task to a sub-clippy: {task}")
+            self._confirm_escalation(task, _run)
+        else:
+            _run(SANDBOX_TOOLS, task)
