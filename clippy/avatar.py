@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 
 import pyglet
+from pyglet.graphics.shader import Shader, ShaderProgram
 
 from .moods import Moods
 from .statemachine import StateMachine
@@ -28,6 +29,34 @@ from .statemachine import StateMachine
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 MAP_PNG = ASSETS / "clippy" / "map.png"
 AGENT_JSON = ASSETS / "clippy" / "agent.json"
+
+#: The sprite sheet's background is magenta (255, 0, 255). It's alpha-0, but
+#: linear filtering bleeds its RGB into the anti-aliased edges, leaving a purple
+#: fringe. Chromakey the same way the explosion does (key by colour distance) so
+#: those edge pixels go transparent.
+KEY_COLOR = (1.0, 0.0, 1.0)
+SIMILARITY = 0.30
+SMOOTHNESS = 0.15
+
+#: Fragment shader for the avatar sprite — pyglet's sprite vertex shader with a
+#: chromakey pass (mirrors clippy/explosion.py).
+_AVATAR_FRAGMENT_SRC = """#version 150 core
+in vec4 vertex_colors;
+in vec3 texture_coords;
+out vec4 final_colors;
+uniform sampler2D sprite_texture;
+uniform vec3 u_key_color;
+uniform float u_similarity;
+uniform float u_smoothness;
+void main()
+{
+    vec4 col = texture(sprite_texture, texture_coords.xy);
+    vec3 diff = abs(col.rgb - u_key_color);
+    float dist = max(diff.r, max(diff.g, diff.b));
+    float key = smoothstep(u_similarity, u_similarity + u_smoothness, dist);
+    final_colors = vec4(col.rgb, col.a * key) * vertex_colors;
+}
+"""
 
 
 def frame_size(source: Path = AGENT_JSON) -> tuple[int, int]:
@@ -84,7 +113,7 @@ def build_mood_sm(moods: Moods) -> StateMachine:
 
 
 class Avatar:
-    def __init__(self, scale: float = 3.0, moods: Moods | None = None):
+    def __init__(self, scale: float = 1.5, moods: Moods | None = None):
         self.moods = moods or Moods()
         self.mood_sm = build_mood_sm(self.moods)
         self._texture = pyglet.image.load(str(MAP_PNG)).get_texture()
@@ -92,7 +121,18 @@ class Avatar:
         self.frame_w, self.frame_h = data["framesize"]
         self.animations = data["animations"]
         self._region_cache = {}
-        self.sprite = pyglet.sprite.Sprite(self._region(0, 0))
+        # Chromakey program (pyglet's sprite vertex shader + key fragment).
+        self._key_program = ShaderProgram(
+            Shader(pyglet.sprite.vertex_source, "vertex"),
+            Shader(_AVATAR_FRAGMENT_SRC, "fragment"),
+        )
+        with self._key_program:
+            self._key_program["u_key_color"] = KEY_COLOR
+            self._key_program["u_similarity"] = SIMILARITY
+            self._key_program["u_smoothness"] = SMOOTHNESS
+        self.sprite = pyglet.sprite.Sprite(
+            self._region(0, 0), program=self._key_program
+        )
         self.sprite.scale = scale
         self.scale = scale
         self._frames = []

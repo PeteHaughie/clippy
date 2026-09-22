@@ -16,7 +16,7 @@ from .explosion import Explosion
 
 
 class ClippyShell(Window):
-    def __init__(self, scale: float = 3.0, live_key: bool = True, position=(60, 420)):
+    def __init__(self, scale: float = 1.5, live_key: bool = True, position=(60, 420)):
         # Whichever context was current before this window is created must be
         # restored before returning: the new window's switch_to() below makes
         # ITS context current, and GL objects of OTHER shells (label, sprite)

@@ -118,7 +118,7 @@ class PrimeShell(ClippyShell):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--scale", type=float, default=3.0)
+    parser.add_argument("--scale", type=float, default=1.5)
     parser.add_argument("--no-shader", action="store_true", help="use ffmpeg-baked frames")
     parser.add_argument("--mood", help="play one mood then quit")
     parser.add_argument("--hint", help="activity hint for --mood")

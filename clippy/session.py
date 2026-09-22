@@ -957,7 +957,7 @@ class Session:
         # Sub-clippy renders at 75% of Prime's scale and spawns beside him (to
         # the right), never directly on top — the sub window is sized from the
         # smaller avatar, so it also fits the delegate bubble on screen.
-        prime_scale = getattr(self.shell.avatar, "scale", 3.0)
+        prime_scale = getattr(self.shell.avatar, "scale", 1.5)
         sub_scale = round(prime_scale * 0.75, 2)
         px, py = self.shell.position
         pw, _ph = self.shell.size
