@@ -35,6 +35,7 @@ from .model import (
     ToolCallStart,
     ToolExecEnd,
     ToolExecStart,
+    TurnEnd,
     TurnStart,
     UiPromptStart,
     UiRequest,
@@ -104,8 +105,10 @@ def normalize(raw: dict) -> Ev:
         return AgentStart()
     if t == "agent_settled":
         return AgentSettled()
-    if t in ("turn_start", "turn_end"):
+    if t == "turn_start":
         return TurnStart()
+    if t == "turn_end":
+        return TurnEnd()
     if t == "message_start":
         return MessageStart(role=(raw.get("message") or {}).get("role", ""))
     if t == "message_end":
@@ -222,10 +225,20 @@ class AgentEventRouter:
     #: Bubble preview length (thinking/answer slice shown above the avatar).
     BUBBLE_LEN = 140
 
+    #: Stop reasons that represent a user-visible final answer to a turn.
+    #: ``toolUse`` means the model is still working (a tool call follows);
+    #: ``error``/``aborted`` are terminal failures handled by retry/exit. The
+    #: empty string is treated as a normal completion for providers that omit
+    #: the field.
+    FINAL_STOP_REASONS = frozenset({"stop", "length", ""})
+
     def __init__(self, sink: EventSink):
         self.sink = sink
         self.thinking = ""
         self.text = ""
+        #: One stream bubble per agent run (one user prompt), kept open across
+        #: tool-call turns so the pane shows a single growing answer bubble.
+        self._stream_open = False
         #: Optional :class:`clippy.chatlog.ChatLogger`. When set, the router
         #: mirrors the semantic events to it (raw thinking/stream deltas, tool
         #: calls/results, final response) so one hook covers the prime AND every
@@ -234,6 +247,7 @@ class AgentEventRouter:
         self._handlers = {
             "agent_start": self._on_agent_start,
             "turn_start": self._noop,
+            "turn_end": self._noop,
             "message_start": self._on_message_start,
             "thinking_delta": self._on_thinking_delta,
             "thinking_end": self._on_thinking_end,
@@ -263,14 +277,25 @@ class AgentEventRouter:
     def _noop(self, ev):
         pass
 
+    def _begin_run(self):
+        """Start a fresh run: reset buffers and open the one stream bubble."""
+        self.thinking = ""
+        self.text = ""
+        self._stream_open = True
+        self.sink.stream_start()
+
+    def _ensure_stream(self):
+        if not self._stream_open:
+            self._begin_run()
+
     def _on_message_start(self, ev: MessageStart):
         if ev.role == "assistant":
-            self.thinking = ""
-            self.text = ""
+            # Open the run's single bubble on the first assistant message if
+            # the provider did not send an ``agent_start`` first.
+            self._ensure_stream()
             if self.logger:
                 self.logger.marker("turn_start")
             self.sink.turn_started()
-            self.sink.stream_start()
 
     def _on_thinking_delta(self, ev: ThinkingDelta):
         self.thinking += ev.delta
@@ -320,6 +345,7 @@ class AgentEventRouter:
             self.sink.retry()
 
     def _on_agent_settled(self, ev):
+        self._stream_open = False
         self.sink.settled()
 
     def _on_ui_request(self, ev: UiRequest):
@@ -337,4 +363,8 @@ class AgentEventRouter:
         self.sink.unparseable(ev.raw)
 
     def _on_agent_start(self, ev):
+        # A new agent run: reset buffers and open the run's stream bubble. Any
+        # later assistant message in the same run reuses this bubble.
+        self._stream_open = False
         self.sink.agent_start()
+        self._ensure_stream()

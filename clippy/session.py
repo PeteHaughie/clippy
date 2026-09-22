@@ -30,6 +30,7 @@ from .shell import ClippyShell
 from .subagent import (
     DEFAULT_TASK,
     DELEGATE_CMD,
+    SANDBOX_TOOLS,
     MockSubAgent,
     PiSubAgent,
     parse_delegation,
@@ -40,8 +41,6 @@ from .notify import notify
 from .scheduler import parse_notify, parse_schedule, parse_trigger
 from .timeutil import humanize, time_header
 
-#: Read/search-only tool allowlist for a sandboxed conversation (005).
-SANDBOX_TOOLS = ["read", "grep", "find", "ls"]
 #: Build-mode consent gate extension (016): asks before mutating tools.
 GATE_EXT = str(
     Path(__file__).resolve().parent / "extensions" / "clippy-gate.ts"
@@ -92,6 +91,25 @@ HELP_TEXT = (
     "Anything else, just chat! You can also press **Tab** in the pane to "
     "toggle between sandbox (read-only) and build (mutation-gated) mode."
 )
+
+
+def command_matches(low: str, cmd: str) -> bool:
+    """True if ``low`` is exactly ``cmd`` or ``cmd`` followed by an argument.
+
+    Avoids prefix collisions like ``/helper`` matching ``/help``: the command
+    token must end at whitespace or the end of the line.
+    """
+    return low == cmd or low.startswith(cmd + " ")
+
+
+def resolve_worker_tools(delegation_tools, caller_tools) -> tuple:
+    """Resolve a worker's tool allowlist, never falling through to "all tools".
+
+    Precedence: the delegation's own tools, else the caller's, else the
+    standard read/search sandbox. An empty result is impossible — a worker is
+    always at most sandboxed.
+    """
+    return tuple(delegation_tools or ()) or tuple(caller_tools or ()) or tuple(SANDBOX_TOOLS)
 
 
 class Session:
@@ -209,34 +227,59 @@ class Session:
         self._pending.put(("pane_resize", data))
 
     def update(self, dt):
-        """Run queued JS→Python callbacks + scheduler ticks on the main thread."""
+        """Run queued JS→Python callbacks + scheduler ticks on the main thread.
+
+        Each job is isolated: a bad message or a command-parsing error must not
+        take down the frame tick (and with it the whole app).
+        """
         # Advance the wall-clock scheduler (fires due tasks; brain actions queue
         # until idle).
-        self.scheduler.tick()
+        try:
+            self.scheduler.tick()
+        except Exception:
+            self._log_error("scheduler.tick")
         while True:
             try:
                 job = self._pending.get_nowait()
             except queue.Empty:
                 break
-            kind = job[0]
-            if kind == "chat":
-                if self._prime_log is not None:
-                    self._prime_log.user(job[1])
-                self._pending_user_text = job[1]
-                self.prompt(job[1])
-            elif kind == "ui_response":
-                self.ui_response(job[1], job[2])
-            elif kind == "mode_toggle":
-                self.toggle()
-            elif kind == "pane_move":
-                self.pane._on_pane_move(job[1])
-            elif kind == "pane_resize":
-                self.pane._on_pane_resize(job[1])
+            try:
+                self._dispatch_job(job)
+            except Exception:
+                self._log_error(f"job {job[0]!r}")
         # Fire queued scheduled-brain actions only when the prime is idle (its
         # PRIME_CONVERSATION SM is back to "idle"), so we never interrupt a
         # turn and never burn heartbeat tokens.
         if self._scheduled_brain_q.qsize() and self._prime_idle():
-            self.brain.prompt(self._scheduled_brain_q.get_nowait(), streaming_behavior="followUp")
+            try:
+                self.brain.prompt(
+                    self._scheduled_brain_q.get_nowait(),
+                    streaming_behavior="followUp",
+                )
+            except Exception:
+                self._log_error("scheduled brain prompt")
+
+    def _dispatch_job(self, job):
+        kind = job[0]
+        if kind == "chat":
+            if self._prime_log is not None:
+                self._prime_log.user(job[1])
+            self.prompt(job[1])
+        elif kind == "ui_response":
+            self.ui_response(job[1], job[2])
+        elif kind == "mode_toggle":
+            self.toggle()
+        elif kind == "pane_move":
+            self.pane._on_pane_move(job[1])
+        elif kind == "pane_resize":
+            self.pane._on_pane_resize(job[1])
+
+    @staticmethod
+    def _log_error(where: str):
+        import traceback
+
+        print(f"[clippy] {where} failed (kept alive):", flush=True)
+        traceback.print_exc()
 
     def _prime_idle(self) -> bool:
         sm = getattr(self.prime_controller, "sm", None)
@@ -292,10 +335,20 @@ class Session:
             pyglet.clock.unschedule(self.prime_controller.update)
         if self.real or pi_ready():
             brain = PiBrain(**self._brain_kwargs())
-            print(f"[clippy] prime brain: {self.mode} mode on Pi RPC ({self.model})")
+            label = f"{self.mode} mode on Pi RPC ({self.model})"
         else:
             brain = MockBrain()
-            print("[clippy] Pi not ready — prime brain on mock")
+            label = "mock (Pi not ready)"
+        try:
+            brain.start()
+        except OSError as exc:
+            # `--real` (or a stale PATH) can point at a missing/broken binary;
+            # degrade to the mock rather than crash the app on startup.
+            print(f"[clippy] brain failed to start ({exc}); using mock", flush=True)
+            brain = MockBrain()
+            brain.start()
+            label = f"mock (start failed: {exc})"
+        print(f"[clippy] prime brain: {label}")
         self.brain = brain
         self.prime_controller = PrimeController(self.shell, brain)
         # Keep the same per-run chat log attached across Tab-toggle re-spawns.
@@ -304,52 +357,54 @@ class Session:
         self._bind_prime()
         self.shell.mode = self.mode
         self.shell.dialog_pending = False
-        brain.start()
         pyglet.clock.schedule_interval(self.prime_controller.update, 1 / 60)
         self.pane.set_mode(self.mode)
 
-    def prompt(self, text: str):
+    def prompt(self, text: str, remember: bool = True):
+        """Handle one chat input. Commands are answered locally; anything else
+        goes to the brain. ``remember=False`` marks host-generated turns (mode
+        changes) that should not be staged for memory curation."""
         stripped = text.strip()
         low = stripped.lower()
-        if low.startswith(HELP_CMD):
+        if command_matches(low, HELP_CMD):
             self.pane.add_message("clippy", HELP_TEXT)
             return
-        if low.startswith(EXIT_CMD) or low.startswith(QUIT_CMD):
+        if command_matches(low, EXIT_CMD) or command_matches(low, QUIT_CMD):
             self._quit()
             return
-        if low.startswith(WHERE_CMD):
+        if command_matches(low, WHERE_CMD):
             x, y = self.shell.position
             self.pane.add_message("clippy", f"I'm at ({x}, {y}).")
             return
-        if low.startswith(MOOD_CMD):
+        if command_matches(low, MOOD_CMD):
             self._run_mood(stripped[len(MOOD_CMD):].strip())
             return
-        if low.startswith(MOVE_CMD):
+        if command_matches(low, MOVE_CMD):
             self._run_move(self._command_move_spec(stripped[len(MOVE_CMD):].strip()))
             return
-        # /skills must be matched before /skill ("/skills" also starts with
-        # "/skill"); both are listed here so the folder is the source of truth.
-        if low.startswith(SKILLS_CMD):
+        # Exact-token matching keeps /skills and /skill distinct (see
+        # command_matches); the folder remains the source of truth.
+        if command_matches(low, SKILLS_CMD):
             self._list_skills()
             return
-        if low.startswith(SKILL_CMD):
+        if command_matches(low, SKILL_CMD):
             arg = stripped[len(SKILL_CMD):].strip()
             name, _, request = arg.partition(" ")
             self._invoke_skill(name.strip(), request.strip())
             return
-        if low.startswith(TEST_CMD):
+        if command_matches(low, TEST_CMD):
             self._run_test(stripped[len(TEST_CMD):].strip())
             return
-        if low.startswith(TIME_CMD):
+        if command_matches(low, TIME_CMD):
             self.pane.add_message("clippy", humanize())
             return
-        if low.startswith(REMIND_CMD):
+        if command_matches(low, REMIND_CMD):
             self._run_remind(stripped[len(REMIND_CMD):].strip())
             return
-        if low.startswith(SCHEDULE_CMD):
+        if command_matches(low, SCHEDULE_CMD):
             self._run_schedule(stripped[len(SCHEDULE_CMD):].strip())
             return
-        if low.startswith(DELEGATE_CMD):
+        if command_matches(low, DELEGATE_CMD):
             task = stripped[len(DELEGATE_CMD):].strip()
             if not task:
                 self.pane.add_message(
@@ -372,6 +427,10 @@ class Session:
         # Brain-bound: inject a compact host-computed time header so Clippy is
         # time-aware without a heartbeat (the model can't run `date` in sandbox),
         # plus a short pointer to the next scheduled task.
+        if remember:
+            # Stage the user's message for the memory curator; only a real
+            # user turn qualifies (not a slash command, not a host message).
+            self._pending_user_text = stripped
         self.brain.prompt(
             f"{time_header()} Scheduled: {self.scheduler.brief()}\n\n{text}",
             streaming_behavior="followUp",
@@ -759,7 +818,7 @@ class Session:
         self.mode = "build" if self.mode == "sandbox" else "sandbox"
         print(f"[clippy] mode -> {self.mode} (re-spawning brain)")
         self._spawn_prime()
-        self.prompt(f"Mode is now {self.mode}.")
+        self.prompt(f"Mode is now {self.mode}.", remember=False)
 
     def _on_answer(self, text: str):
         """Prime's final message: surface it in the pane, and handle any
@@ -812,10 +871,24 @@ class Session:
         # Memory curation (batched): pair the user's message that started this
         # turn with the final answer, and hand the batch to the background
         # curator once it reaches the configured turn count.
-        if self.memory_enabled and self._pending_user_text is not None and clean:
-            self._memory_batch.append((self._pending_user_text, clean))
-            self._pending_user_text = None
-            if len(self._memory_batch) >= self.memory_every_n_turns and not self._curator_busy:
+        self._account_memory(clean)
+
+    def _account_memory(self, clean: str):
+        """Pair the staged user turn with the final answer for the curator.
+
+        The staged turn is cleared on *every* final answer, even a directive-only
+        or empty one, so a later unrelated answer can never be paired with it.
+        """
+        if self._pending_user_text is None:
+            return
+        user_text = self._pending_user_text
+        self._pending_user_text = None
+        if self.memory_enabled and clean:
+            self._memory_batch.append((user_text, clean))
+            if (
+                len(self._memory_batch) >= self.memory_every_n_turns
+                and not self._curator_busy
+            ):
                 self._curate(self._memory_batch)
                 self._memory_batch = []
 
@@ -838,14 +911,19 @@ class Session:
         self._curator_busy = True
 
         def _drain():
-            while True:
-                try:
-                    ev = agent.queue.get(timeout=300)
-                except Exception:
-                    break
-                if ev.get("type") == "sub_exit":
-                    self._curator_busy = False
-                    break
+            try:
+                while True:
+                    try:
+                        ev = agent.queue.get(timeout=300)
+                    except Exception:
+                        # Queue timeout / drain error: stop waiting. The
+                        # `finally` below makes sure the slot is released even
+                        # if the curator never emits sub_exit (hung process).
+                        break
+                    if ev.get("type") == "sub_exit":
+                        break
+            finally:
+                self._curator_busy = False
 
         import threading
 
@@ -910,15 +988,16 @@ class Session:
             d = task
             if (not d.tools and tools) or not d.source:
                 # Fill missing pieces (tools and/or source tag) in one re-make.
+                # An empty tool set falls back to the sandbox, never "all tools".
                 d = Delegation.make(
                     d.text,
-                    tools=d.tools or tools or (),
+                    tools=d.tools or tools or SANDBOX_TOOLS,
                     model=d.model,
                     source=d.source or source,
                 )
         else:
             d = Delegation.make(
-                task, tools=tools or (), model=self.model, source=source
+                task, tools=tools or SANDBOX_TOOLS, model=self.model, source=source
             )
         self._worker_delegation = d
 
@@ -928,7 +1007,7 @@ class Session:
             if on_complete:
                 on_complete(failed, report)
 
-        self._worker_controller = self._spawn_worker(d, tools=d.tools or tools, on_complete=_wrap)
+        self._worker_controller = self._spawn_worker(d, on_complete=_wrap)
         return True
 
     def _spawn_worker(self, task: Delegation, tools=None, on_complete=None) -> SubClippyController:
@@ -936,7 +1015,9 @@ class Session:
 
         text = task.text
         model = task.model or self.model
-        tools = task.tools or tools or None
+        # Workers are sandboxed by default: the delegation's tools, else the
+        # caller's, else the standard read/search sandbox — never Pi's full set.
+        tools = resolve_worker_tools(task.tools, tools)
         if self.real or pi_ready():
             # Workers learn the notify + schedule protocols (emit
             # [CLIPPY::NOTIFY] / [CLIPPY::SCHEDULE]) so a delegated task can
@@ -950,10 +1031,19 @@ class Session:
                     str(SKILLS_DIR / "schedule"),
                 ],
             )
-            print(f"[clippy] delegating to PI sub-agent ({model})")
+            label = f"PI sub-agent ({model})"
         else:
             agent = MockSubAgent(task=text)
-            print("[clippy] PI not ready — delegating to mock sub-agent")
+            label = "mock sub-agent (Pi not ready)"
+        try:
+            agent.start()
+        except OSError as exc:
+            # A missing/broken `pi` must not crash the delegation path.
+            print(f"[clippy] sub-agent failed to start ({exc}); using mock", flush=True)
+            agent = MockSubAgent(task=text)
+            agent.start()
+            label = f"mock sub-agent (start failed: {exc})"
+        print(f"[clippy] delegating to {label}")
         # Sub-clippy renders at 75% of Prime's scale and spawns beside him (to
         # the right), never directly on top — the sub window is sized from the
         # smaller avatar, so it also fits the delegate bubble on screen.
@@ -980,7 +1070,6 @@ class Session:
         shell.set_location(sx, sy)
         pyglet.clock.schedule_interval(shell.update, 1 / 60)
         pyglet.clock.schedule_interval(ctrl.update, 1 / 60)
-        agent.start()
         # The worker's construction and show() both make ITS GL context current
         # (ClippyShell.__init__ -> switch_to(), show() -> _map() -> on_expose ->
         # on_draw). Restore the prime shell's context so any main-shell GL work

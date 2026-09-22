@@ -22,6 +22,7 @@ from pathlib import Path
 from .model import SCHEDULED_TASK
 from .roots import SCHEDULER_FILE
 from .statemachine import StateMachine
+from .subagent import extract_directive
 
 #: Time-unit multipliers for the /remind parser.
 _UNIT_SECONDS = {
@@ -65,21 +66,33 @@ def parse_trigger(text: str) -> tuple[dict, str]:
     if m:
         n, unit, rest = int(m.group(1)), m.group(2), m.group(3)
         secs = _unit_seconds(unit)
-        if secs:
+        if secs and n * secs > 0:
             return {"type": "in", "seconds": n * secs}, rest.strip()
     m = re.match(r"every\s+(\d+)\s*([a-z]+)\b(.*)", text, re.IGNORECASE | re.DOTALL)
     if m:
         n, unit, rest = int(m.group(1)), m.group(2), m.group(3)
         secs = _unit_seconds(unit)
-        if secs:
+        # A zero interval would re-arm every tick — reject it.
+        if secs and n * secs > 0:
             return {"type": "interval", "seconds": n * secs}, rest.strip()
     m = re.match(r"daily\s+at\s+(\d{1,2}):(\d{2})\b(.*)", text, re.IGNORECASE | re.DOTALL)
     if m:
-        return {"type": "daily", "hour": int(m.group(1)), "minute": int(m.group(2))}, m.group(3).strip()
+        hour, minute = int(m.group(1)), int(m.group(2))
+        if _valid_hhmm(hour, minute):
+            return {"type": "daily", "hour": hour, "minute": minute}, m.group(3).strip()
     m = re.match(r"at\s+(\d{1,2}):(\d{2})\b(.*)", text, re.IGNORECASE | re.DOTALL)
     if m:
-        return {"type": "at", "hour": int(m.group(1)), "minute": int(m.group(2))}, m.group(3).strip()
+        hour, minute = int(m.group(1)), int(m.group(2))
+        if _valid_hhmm(hour, minute):
+            return {"type": "at", "hour": hour, "minute": minute}, m.group(3).strip()
     return {}, ""
+
+
+def _valid_hhmm(hour: int, minute: int) -> bool:
+    r"""True for a real 24-hour clock time. The ``(\d{1,2})`` regex accepts 99,
+    so a bad time must be rejected here — otherwise ``_next_wake``'s
+    ``datetime.replace`` would raise on user/model input."""
+    return 0 <= hour <= 23 and 0 <= minute <= 59
 
 
 #: Directive markers (same pattern as [CLIPPY::DELEGATE]…[CLIPPY::END]): the
@@ -87,27 +100,6 @@ def parse_trigger(text: str) -> tuple[dict, str]:
 _SCHEDULE_OPEN = "[CLIPPY::SCHEDULE]"
 _NOTIFY_OPEN = "[CLIPPY::NOTIFY]"
 _DIRECTIVE_END = "[CLIPPY::END]"
-
-
-def _extract_directive(text: str, open_marker: str) -> tuple[int, int, int] | None:
-    """Return ``(start, body_end, clean_end)`` slice indices of a directive block.
-
-    ``body_end`` is where the directive's body ends (before the close marker);
-    ``clean_end`` is where the block is cut from the answer (includes the close
-    marker, so directives never linger in the pane). The close marker
-    ``[CLIPPY::END]`` is *optional*: models frequently omit it, so when absent
-    the block runs to the end of the directive's line.
-    """
-    start = text.find(open_marker)
-    if start == -1:
-        return None
-    body_start = start + len(open_marker)
-    close = text.find(_DIRECTIVE_END, body_start)
-    if close != -1:
-        return start, close, close + len(_DIRECTIVE_END)
-    nl = text.find("\n", body_start)
-    end = nl if nl != -1 else len(text)
-    return start, end, end
 
 
 def parse_schedule(text: str) -> tuple[str, dict | None, str | None]:
@@ -120,7 +112,7 @@ def parse_schedule(text: str) -> tuple[str, dict | None, str | None]:
     """
     if not text:
         return "", None, None
-    span = _extract_directive(text, _SCHEDULE_OPEN)
+    span = extract_directive(text, _SCHEDULE_OPEN)
     if span is None:
         return text, None, None
     start, body_end, clean_end = span
@@ -140,7 +132,7 @@ def parse_notify(text: str) -> tuple[str, str | None]:
     """
     if not text:
         return "", None
-    span = _extract_directive(text, _NOTIFY_OPEN)
+    span = extract_directive(text, _NOTIFY_OPEN)
     if span is None:
         return text, None
     start, body_end, clean_end = span

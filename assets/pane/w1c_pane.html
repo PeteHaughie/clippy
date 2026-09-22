@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="vendor/w1c/w1c.css">
 <script src="vendor/w1c/w1c.bundle.js"></script>
 <script src="vendor/marked/marked.umd.js"></script>
+<script src="sanitize.js"></script>
 <script>
   // Instrumentation (probe harness): body[data-w1c] reports bundle load/upgrade state.
   document.body.dataset.w1c = 'bundle-empty';
@@ -257,27 +258,14 @@
     gfm: true,
     breaks: false,
   };
-  const MD_FORBIDDEN = ['script', 'iframe', 'object', 'embed', 'style', 'link', 'meta', 'base', 'form'];
-  function sanitizeHtml(root) {
-    const walk = (node) => {
-      for (const el of Array.from(node.querySelectorAll('*'))) {
-        if (MD_FORBIDDEN.includes(el.tagName.toLowerCase())) {
-          el.remove();
-          continue;
-        }
-        for (const attr of Array.from(el.attributes)) {
-          const n = attr.name.toLowerCase();
-          const v = attr.value.toLowerCase();
-          if (n.startsWith('on') || n === 'href' && v.startsWith('javascript:') ||
-              n === 'src' && v.startsWith('javascript:')) {
-            el.removeAttribute(attr.name);
-          }
-        }
-      }
-    };
-    walk(root);
-    return root;
-  }
+  // Allowlist sanitizer lives in sanitize.js (pure predicates + DOM walk).
+  // Fail CLOSED if it did not load: drop the HTML rather than render it raw.
+  const sanitizeHtml = (window.ClipSanitize && window.ClipSanitize.sanitize)
+    || ((root) => {
+         console.error('ClipSanitize missing — refusing to render HTML');
+         while (root.firstChild) root.removeChild(root.firstChild);
+         return root;
+       });
   function renderMarkdown(text) {
     if (!text || !text.trim()) return '';
     let html;
@@ -309,12 +297,12 @@
     chat.appendChild(d);
     chat.scrollTop = chat.scrollHeight;
   }
-  // Live reasoning stream: one growing bubble per assistant turn. Python
-  // re-sends the full accumulated thinking/answer text each delta; marked
-  // renders the partial markdown, so formatting appears as it streams.
-  // Deltas can arrive far faster than the pane can re-parse + re-render the
-  // whole buffer, so coalesce them: render at most once per ~50ms, always
-  // flushing the latest before a bubble is finalized.
+  // Live reasoning stream: one growing bubble per agent run. Python re-sends
+  // the full accumulated thinking/answer text (itself throttled on the Python
+  // side); marked renders the partial markdown, so formatting appears as it
+  // streams. Deltas can still arrive faster than the pane can re-parse +
+  // re-render the whole buffer, so coalesce them too: render at most once per
+  // ~50ms, always flushing the latest before a bubble is finalized.
   let currentStream = null;
   let streamTimer = null;
   let pendingRender = null;
@@ -344,7 +332,10 @@
       s = makeStreamBubble();
     }
     if (!s) return;
-    if (typeof finalText === 'string') {
+    // Replace the streamed answer only when a non-empty final arrived. An
+    // empty final (e.g. the safety-net close from `settled`) just closes the
+    // bubble, preserving whatever streamed in.
+    if (typeof finalText === 'string' && finalText.trim()) {
       s.answer.textContent = '';
       const box = renderMarkdown(finalText);
       if (box) s.answer.appendChild(box);

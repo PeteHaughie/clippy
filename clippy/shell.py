@@ -174,7 +174,13 @@ class ClippyShell(Window):
         return accepted
 
     def set_bubble(self, text: str):
-        """Replace the speech-bubble line shown above the avatar."""
+        """Record the shell's speech-bubble line.
+
+        NOTE: the avatar window is sized to the sprite and has no room for a
+        bubble, so this is currently *non-visual*. The live reasoning/answer
+        bubble is rendered by the chat pane. This remains the brain's status
+        channel for a future bubble/status surface (see docs/remediation-plan.md).
+        """
         self._bubble = text
 
     def play_idle_animation(self, name: str) -> bool:

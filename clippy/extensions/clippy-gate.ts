@@ -2,31 +2,35 @@
  * Clippy build-mode gate (ticket 016).
  *
  * Loaded only on the prime Pi RPC process when Clippy is in BUILD mode
- * (full tools). Intercepts every mutating built-in tool call (bash/write/edit
- * by default) and asks the human for consent through `ctx.ui.confirm`, which
- * surfaces on the RPC wire as an `extension_ui_request` the Python host turns
- * into a card in the pane. The host's `extension_ui_response` resolves the
- * dialog.
+ * (full tools). It fails CLOSED: every tool call must either be on the
+ * read-only allowlist or be explicitly confirmed by the human through
+ * `ctx.ui.confirm`, which surfaces on the RPC wire as an
+ * `extension_ui_request` the Python host turns into a card in the pane. The
+ * host's `extension_ui_response` resolves the dialog.
  *
- * In modes without a UI (`ctx.hasUI === false`) it fails CLOSED — the mutating
- * call is blocked. Clippy therefore never runs a build-mode brain with an
- * unattended gate: it always answers the dialogs.
+ * This is an ALLOWLIST, not a deny-list: a new or unknown mutating tool does
+ * not slip through just because it wasn't named. If there is no UI to confirm
+ * on (`ctx.hasUI === false`), every non-read-only call is blocked.
  *
- * Gate the set via env: CLIPPY_GATE_TOOLS=bash,write,edit
+ * Extend the trusted read-only set via env: CLIPPY_GATE_ALLOW=read,grep,...
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const DEFAULT_GATED = ["bash", "write", "edit"];
+/** Tools considered non-mutating and safe to run without confirmation. */
+const DEFAULT_READ_ONLY = ["read", "grep", "find", "ls", "search"];
 
 export default function (pi: ExtensionAPI) {
-	const gated = (process.env.CLIPPY_GATE_TOOLS ?? DEFAULT_GATED.join(","))
-		.split(",")
-		.map((s) => s.trim())
-		.filter(Boolean);
+	const readOnly = new Set(
+		(process.env.CLIPPY_GATE_ALLOW ?? DEFAULT_READ_ONLY.join(","))
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean),
+	);
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (!gated.includes(event.toolName)) return undefined;
+		// Read-only tools never mutate the system; let them run.
+		if (readOnly.has(event.toolName)) return undefined;
 
 		const input = event.input ?? {};
 		let detail = "";
@@ -38,7 +42,7 @@ export default function (pi: ExtensionAPI) {
 		if (!ctx.hasUI) {
 			return {
 				block: true,
-				reason: `${event.toolName} blocked (no UI for confirmation)`,
+				reason: `${event.toolName} blocked (not on the read-only allowlist and no UI for confirmation)`,
 			};
 		}
 

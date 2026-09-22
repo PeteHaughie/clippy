@@ -14,9 +14,29 @@ import shutil
 import subprocess
 
 
+def _applescript_string(value: str) -> str:
+    """Render ``value`` as a quoted AppleScript string literal.
+
+    AppleScript string literals use double quotes and recognise the usual
+    backslash escapes, so ``repr`` is not a valid encoder (it can emit single
+    quotes, which AppleScript does not treat as a string delimiter, and leaves
+    quotes/backslashes unescaped). Escape explicitly.
+    """
+    escaped = (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
 def _osascript(title: str, text: str) -> bool:
     script = (
-        f'display notification {text!r} with title {title!r}'
+        f"display notification {_applescript_string(text)} "
+        f"with title {_applescript_string(title)}"
     )
     try:
         subprocess.run(

@@ -7,9 +7,12 @@ timestamp and a ``type`` field, so a transcript is greppable / replayable and
 order is preserved.
 
 Logging is gated by ``logging.enabled`` in config (default on). Writes happen
-on the main thread (the event routers and ``session.update`` both drain there),
-each line is flushed immediately so even a crash or hang leaves the full
-transcript on disk, and file handles close via ``atexit`` on clean process exit.
+on the main thread (the event routers and ``session.update`` both drain there).
+
+Deltas (thinking/stream) are buffered and flushed at turn boundaries (a
+``response``/marker line) or once the buffer grows past ``FLUSH_BYTES``, so
+there is not a write+flush syscall per token; a crash loses at most the current
+turn's in-flight deltas, not the transcript. File handles close via ``atexit``.
 """
 
 import atexit
@@ -18,6 +21,11 @@ import json
 from pathlib import Path
 
 from .roots import LOGS_DIR
+
+#: Kinds that mark a turn/session boundary: flush the buffered deltas.
+FLUSH_KINDS = frozenset({"response", "turn_start", "chat_start", "task", "sub_exit"})
+#: Flush early if the pending buffer grows past this many bytes.
+FLUSH_BYTES = 64 * 1024
 
 
 def _now() -> str:
@@ -41,20 +49,34 @@ class ChatLogger:
         self.path = Path(path)
         self.label = label
         self._fh = None
+        self._buf: list[str] = []
+        self._buf_bytes = 0
         atexit.register(self.close)
 
     # ------------------------------------------------------------- writing
 
     def _write(self, kind: str, **fields) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self._fh is None:
-            self._fh = open(self.path, "a", encoding="utf-8")
         entry = {"ts": _now(), "type": kind}
         if self.label:
             entry["label"] = self.label
         entry.update(fields)
-        self._fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        self._buf.append(line)
+        self._buf_bytes += len(line)
+        if kind in FLUSH_KINDS or self._buf_bytes >= FLUSH_BYTES:
+            self.flush()
+
+    def flush(self) -> None:
+        """Write and flush any buffered lines."""
+        if not self._buf:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self._fh is None:
+            self._fh = open(self.path, "a", encoding="utf-8")
+        self._fh.write("".join(self._buf))
         self._fh.flush()
+        self._buf = []
+        self._buf_bytes = 0
 
     # ------------------------------------------------------------- events
 
@@ -86,6 +108,7 @@ class ChatLogger:
     # ------------------------------------------------------------- teardown
 
     def close(self) -> None:
+        self.flush()
         if self._fh is not None:
             try:
                 self._fh.flush()

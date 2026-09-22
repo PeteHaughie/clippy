@@ -12,7 +12,6 @@ Two implementations of the :class:`SubAgent` interface:
 
 import datetime
 import json
-import re
 import shutil
 import subprocess
 import threading
@@ -23,7 +22,12 @@ from pathlib import Path
 from .roots import make_scratch_dir
 
 #: Read/search-only tool allowlist for delegated sub-clippies (005/017).
-SUB_SANDBOX_TOOLS = ["read", "grep", "find", "ls"]
+#: This is the *default and floor* for every worker: a delegation that does not
+#: name tools gets sandboxed, and `PiSubAgent` refuses an unset (`None`)
+#: allowlist so a caller can never accidentally inherit Pi's full tool set.
+SANDBOX_TOOLS = ["read", "grep", "find", "ls"]
+#: Back-compat alias (older workers/tests referenced the SUB_ name).
+SUB_SANDBOX_TOOLS = SANDBOX_TOOLS
 
 #: The composition-skill directive (clippy/skills/sub-clippy): the prime ends
 #: its reply with a [CLIPPY::DELEGATE] block; the host turns it into a worker.
@@ -32,51 +36,69 @@ DELEGATE_CLOSE = "[CLIPPY::END]"
 #: Reliable chat command the user types in the pane: ``/delegate <task>``. The
 #: host intercepts it directly (no model compliance needed for the demo path).
 DELEGATE_CMD = "/delegate"
-_DELEGATE_RE = re.compile(
-    r"\[CLIPPY::DELEGATE\]\s*(.*?)\s*\[CLIPPY::END\]", re.DOTALL
-)
+
+
+def extract_directive(text: str, open_marker: str, close_marker: str = "[CLIPPY::END]") -> tuple[int, int, int] | None:
+    """Return ``(start, body_end, clean_end)`` slice indices of a directive block.
+
+    Shared with the scheduler's ``[CLIPPY::SCHEDULE]``/``[CLIPPY::NOTIFY]``
+    parsers: the close marker is *optional* because models frequently omit it,
+    in which case the block runs to the end of the directive's line. ``clean_end``
+    includes the close marker when present so directives never linger in the pane.
+    """
+    start = text.find(open_marker)
+    if start == -1:
+        return None
+    body_start = start + len(open_marker)
+    close = text.find(close_marker, body_start)
+    if close != -1:
+        return start, close, close + len(close_marker)
+    nl = text.find("\n", body_start)
+    end = nl if nl != -1 else len(text)
+    return start, end, end
 
 
 def parse_delegation(text: str) -> tuple[str, str | None]:
     """Return ``(clean_text, task)`` for an assistant reply.
 
     If the reply carries a ``[CLIPPY::DELEGATE] … [CLIPPY::END]`` block, ``task``
-    is its (stripped) content and the block is removed from ``clean_text``.
+    is its (stripped) content and the block is removed from ``clean_text``. The
+    close marker is optional (the block then runs to the end of its line).
     Without a block, ``(text, None)``.
     """
     if not text:
         return "", None
-    m = _DELEGATE_RE.search(text)
-    if not m:
+    span = extract_directive(text, DELEGATE_OPEN)
+    if span is None:
         return text, None
-    task = m.group(1).strip()
-    clean = (text[: m.start()] + text[m.end():]).strip()
+    start, body_end, clean_end = span
+    task = text[start + len(DELEGATE_OPEN):body_end].strip()
+    clean = (text[:start] + text[clean_end:]).strip()
     return clean, (task or None)
 
 #: The movement directive (clippy/skills/move): the brain ends its reply with
 #: a [CLIPPY::MOVE] block to move Clippy on screen; the host turns it into a
 #: move (named spot or absolute x y).
 MOVE_OPEN = "[CLIPPY::MOVE]"
-_MOVE_RE = re.compile(
-    r"\[CLIPPY::MOVE\]\s*(.*?)\s*\[CLIPPY::END\]", re.DOTALL
-)
 
 
 def parse_move(text: str) -> tuple[str, str | tuple[int, int] | None]:
     """Return ``(clean_text, move_spec)`` for an assistant reply.
 
-    If the reply carries a ``[CLIPPY::MOVE] … [CLIPPY::END]`` block, the block
-    is stripped from ``clean_text`` and ``move_spec`` is either an absolute
-    ``(x, y)`` pair or a named-spot string (validated by the caller against
-    the shell's known spots). Without a block, ``(text, None)``.
+    If the reply carries a ``[CLIPPY::MOVE] … [CLIPPY::END]`` block (close
+    marker optional), the block is stripped from ``clean_text`` and
+    ``move_spec`` is either an absolute ``(x, y)`` pair or a named-spot string
+    (validated by the caller against the shell's known spots). Without a block,
+    ``(text, None)``.
     """
     if not text:
         return "", None
-    m = _MOVE_RE.search(text)
-    if not m:
+    span = extract_directive(text, MOVE_OPEN)
+    if span is None:
         return text, None
-    spec = m.group(1).strip()
-    clean = (text[: m.start()] + text[m.end():]).strip()
+    start, body_end, clean_end = span
+    spec = text[start + len(MOVE_OPEN):body_end].strip()
+    clean = (text[:start] + text[clean_end:]).strip()
     if not spec:
         return clean, None
     parts = spec.split()
@@ -121,14 +143,28 @@ class SubAgent:
         raise NotImplementedError
 
 
-def pi_ready() -> bool:
+#: Cached ``pi_ready()`` result. Spawning ``pi --list-models`` is a Node
+#: process (~hundreds of ms) and this is called on every prime/worker spawn,
+#: so the answer is memoised for the process. Pass ``refresh=True`` to re-check.
+_pi_ready_cache: bool | None = None
+
+
+def pi_ready(refresh: bool = False) -> bool:
     """True if a real Pi binary is on PATH with a known real provider configured.
 
     Providers we treat as "real": ``omlx`` (oMLX, tailnet or local) and
     ``opencode`` (OpenCode Zen/cloud OpenAI-compatible). A config that only
     has e.g. the stock Pi cloud provider should not be treated as ready for
-    the local loop.
+    the local loop. The result is cached (see ``_pi_ready_cache``).
     """
+    global _pi_ready_cache
+    if _pi_ready_cache is not None and not refresh:
+        return _pi_ready_cache
+    _pi_ready_cache = _probe_pi_ready()
+    return _pi_ready_cache
+
+
+def _probe_pi_ready() -> bool:
     if shutil.which("pi") is None:
         return False
     try:
@@ -163,6 +199,14 @@ class PiSubAgent(SubAgent):
         self.model = model
         self.thinking = thinking
         self.cwd = cwd or make_scratch_dir()
+        if tools is None:
+            # Never let a worker inherit Pi's full default tool set: an unset
+            # allowlist is a bug, not "everything". Callers must opt in to the
+            # exact tools they want (SANDBOX_TOOLS for the standard sandbox).
+            raise ValueError(
+                "PiSubAgent requires an explicit tools allowlist "
+                "(pass SANDBOX_TOOLS for a sandboxed worker)"
+            )
         self.tools = tools
         self.skills = skills
         self._q: queue.Queue = queue.Queue()

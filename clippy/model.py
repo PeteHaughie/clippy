@@ -158,6 +158,11 @@ class TurnStart(Ev):
 
 
 @dataclass(frozen=True)
+class TurnEnd(Ev):
+    kind: ClassVar[str] = "turn_end"
+
+
+@dataclass(frozen=True)
 class MessageStart(Ev):
     role: str = ""
     kind: ClassVar[str] = "message_start"
@@ -270,7 +275,7 @@ class Unknown(Ev):
 
 EV_KINDS: dict[str, type] = {
     ev.kind: ev for ev in (
-        AgentStart, TurnStart, MessageStart, ThinkingDelta, ThinkingEnd,
+        AgentStart, TurnStart, TurnEnd, MessageStart, ThinkingDelta, ThinkingEnd,
         TextDelta, ToolCallStart, ToolExecStart, ToolExecEnd, MessageEnd,
         AgentEnd, AgentSettled, UiRequest, UiPromptStart, Response, Exit, Unknown,
     )
@@ -353,6 +358,9 @@ PRIME_CONVERSATION: dict = {
     "transitions": [
         {"src": "*", "trigger": "turn_started", "to": "working"},
         {"src": "*", "trigger": "answer", "to": "answering"},
+        # A dead brain process must return the SM to idle so queued scheduled
+        # brain actions are not stalled forever waiting for an idle prime.
+        {"src": "*", "trigger": "exit", "to": "idle"},
         {"src": "*", "trigger": "settled", "to": "idle"},
         {"src": "*", "trigger": "retry", "to": "working"},
     ],

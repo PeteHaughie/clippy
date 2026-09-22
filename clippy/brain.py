@@ -152,15 +152,23 @@ class PiBrain(Brain):
         stderr_fh = open(self._stderr_path, "w")
         if self._transcript is not None:
             self._xf = open(self._transcript, "a")
-        self._proc = subprocess.Popen(
-            self._cmd(),
-            cwd=str(self.cwd),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=stderr_fh,
-            text=True,
-            bufsize=1,
-        )
+        try:
+            self._proc = subprocess.Popen(
+                self._cmd(),
+                cwd=str(self.cwd),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=stderr_fh,
+                text=True,
+                bufsize=1,
+            )
+        except OSError:
+            # Don't leak the log/transcript handles when the process can't start.
+            stderr_fh.close()
+            if self._xf is not None:
+                self._xf.close()
+                self._xf = None
+            raise
         self.cwd.joinpath("brain.cmd").write_text(" ".join(self._cmd()) + "\n")
         self._reader = threading.Thread(
             target=self._read_stdout, args=(stderr_fh,), daemon=True

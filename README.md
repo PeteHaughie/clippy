@@ -35,7 +35,8 @@ mock brains** so the demo still runs offline (see [MockBrain](#brains)).
 
 - **Floating animated avatar** — transparent, always-on-top, draggable overlay window
   (pyglet 2.x). Animated moods (thinking / working / listening / celebrating / …)
-  driven by the conversation state, with a live speech bubble and status line.
+  driven by the conversation state. The avatar window is sized to the sprite; the
+  live reasoning/answer bubble and mode/status badge are rendered in the chat pane.
 - **Retro chat pane** — a borderless always-on-top window hosting the **w1c** retro
   web-components chat UI (windows-95 theme). macOS renders it in a transparent `NSPanel` +
   `WKWebView`; Linux in a `WebKitGTK` window (same vendored HTML/JS, same bridge).
@@ -277,7 +278,17 @@ The codebase is verified headless where the GUI can't run:
 
 Structural guarantees: `Session` validates the session graph's required topology at startup
 (raises listing any missing connections); the typed-event catalog and state machines are
-exercised headless. The pane's markdown/stream JS logic is tested with a Node DOM shim.
+exercised headless.
+
+Unit tests (stdlib `unittest`, no extra deps) cover the safety-critical logic — worker
+tool allowlists, directive parsing, stop-reason routing, memory staging, scheduler
+validation, chat-log batching and `pi_ready` caching. The pane's sanitizer predicates are
+tested with Node's built-in runner:
+
+```bash
+.venv/bin/python -m unittest discover -s tests   # Python logic
+node --test tests/test_sanitize.mjs              # pane sanitizer allowlist
+```
 
 To run checks hermetically without touching the real `~/.clippy`:
 
@@ -286,6 +297,23 @@ CLIPPY_HOME="$(mktemp -d)" .venv/bin/python -m clippy.brain --mock
 ```
 
 ---
+
+## Known limitations & accepted risks
+
+- **Memory curator boundary is soft.** The background curator is a full Pi agent
+  with `write`/`edit`; it is scoped to `~/.clippy/memory/` only by its system
+  prompt, not by a filesystem sandbox. Treat this as a local-demo risk.
+- **Transcripts are on by default.** `logging.enabled` writes full JSONL
+  transcripts (prompts, tool calls and results) under `~/.clippy/logs/`; set it
+  to `false` to disable.
+- **Build-mode gate is an allowlist.** Every tool not on the read-only allowlist
+  (`CLIPPY_GATE_ALLOW`, default `read,grep,find,ls,search`) raises a consent card,
+  and is blocked outright when there is no UI.
+- **Worker delegation is sandboxed.** A sub-clippy always gets an explicit tool
+  allowlist (read/search); it can never inherit Pi's full tool set.
+- **Shell speech bubble is non-visual.** `ClippyShell.set_bubble` records the
+  brain's status line but the avatar window does not draw it; the live bubble is
+  in the chat pane. See [`docs/remediation-plan.md`](docs/remediation-plan.md).
 
 ## Provenance & license
 
