@@ -93,7 +93,10 @@
           el.removeAttribute(attrs[j].name);
         }
       }
-      // Links open in the pane's own webview: drop target and harden rel.
+      // Links open in the OS browser, not the pane. The pane's webview
+      // intercepts navigation at the native policy layer (clippy/pane.py) and
+      // hands http/https/mailto URLs to the default browser; target is still
+      // dropped here so nothing escapes that layer.
       if (tag === "a" && el.setAttribute) {
         el.removeAttribute("target");
         el.setAttribute("rel", "noopener noreferrer");

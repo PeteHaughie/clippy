@@ -47,6 +47,11 @@ the allowlist before insertion. URL attributes are scheme-checked (`http`,
 `https`, `mailto` for `href`; `http`/`https` for `src`), control characters are
 stripped to defeat scheme smuggling, and `target` is dropped with `rel` hardened.
 
+Links never navigate the pane: the native webview navigation policy in
+`clippy/pane.py` (`_classify_navigation`) cancels any navigation that is not the
+pane's own document and opens `http`/`https`/`mailto` URLs in the OS default
+browser. The sanitizer's `target` removal is the first line of that defence.
+
 ## Rationale
 
 1. An allowlist is fail-closed by construction — unknown tags/attrs are dropped.
@@ -70,7 +75,11 @@ stripped to defeat scheme smuggling, and `target` is dropped with `rel` hardened
 
 - `assets/pane/sanitize.js`; wired in `assets/pane/w1c_pane.html`
   (`<script src="sanitize.js">`, fail-closed fallback).
-- `tests/test_sanitize.mjs` (XSS corpus).
+- `clippy/pane.py` — `_classify_navigation` (allow/open/drop) called from the
+  macOS navigation delegate and the WebKitGTK `decide-policy` handler; external
+  links open in the OS browser, the pane document is the only committed URL.
+- `tests/test_sanitize.mjs` (XSS corpus); `tests/test_pane_links.py`
+  (navigation classification).
 
 ## References
 

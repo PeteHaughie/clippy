@@ -53,15 +53,25 @@ if sys.platform == "darwin":
         NSPanel,
         NSWindowStyleMaskBorderless,
         NSWindowStyleMaskNonactivatingPanel,
+        NSWorkspace,
     )
     from Foundation import NSMakeRect, NSObject, NSPoint, NSSize, NSURL
-    from WebKit import WKWebView, WKWebViewConfiguration
+    from WebKit import (
+        WKNavigationActionPolicyAllow,
+        WKNavigationActionPolicyCancel,
+        WKWebView,
+        WKWebViewConfiguration,
+    )
 
 import pyglet
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PANE_HTML = REPO_ROOT / "assets" / "pane" / "w1c_pane.html"
 ASSETS_DIR = REPO_ROOT / "assets"
+#: The pane's own document URL. The only navigation the webview is ever
+#: allowed to commit to; everything else is intercepted (see
+#: ``_classify_navigation``).
+PANE_URI = PANE_HTML.resolve().as_uri()
 
 PANE_W, PANE_H = 340, 460  # points; Retina scales pixels x2 for capture
 BRIDGE_NAME = "clippy"
@@ -186,6 +196,49 @@ def _anchor_box(shell, w: float, h: float) -> tuple:
     return px, py, w, h
 
 
+# ------------------------------------------------------ external navigation
+# The pane is a locked-down chat surface (ADR-0005): it must never navigate its
+# webview away from its own document, or a model-rendered link would replace
+# the chat with a web page. Both backends ask ``_classify_navigation`` what to
+# do with each navigation request and hand external URLs to the OS browser.
+# The predicate is pure so it can be unit-tested without a webview
+# (tests/test_pane_links.py).
+
+
+def _classify_navigation(uri, pane_uri: str = PANE_URI) -> str:
+    """Classify a webview navigation request.
+
+    ``"allow"`` — the pane's own document (the initial load) or an internal
+    ``about:`` document: let the webview commit it.
+    ``"open"`` — an external ``http``/``https``/``mailto`` URL: cancel the
+    in-webview navigation and open it in the OS default handler.
+    ``"drop"`` — anything else (relative/``file:`` URLs, or no URL at all):
+    cancel silently so the pane can never navigate off its document.
+    """
+    u = str(uri or "").strip()
+    if u == pane_uri or u.lower().startswith("about:"):
+        return "allow"
+    scheme = u.split(":", 1)[0].lower() if ":" in u else ""
+    if scheme in ("http", "https", "mailto"):
+        return "open"
+    return "drop"
+
+
+def _open_external(uri: str):
+    """Open a URL in the OS default handler (browser / mail client)."""
+    try:
+        if sys.platform == "darwin":
+            NSWorkspace.sharedWorkspace().openURL_(NSURL.URLWithString_(uri))
+        elif Gtk is not None:
+            Gtk.show_uri_on_window(None, uri, Gdk.CURRENT_TIME)
+        else:
+            import webbrowser
+
+            webbrowser.open(uri)
+    except Exception as exc:  # pragma: no cover — platform shell failure
+        print(f"[pane] could not open {uri!r}: {exc}", flush=True)
+
+
 if sys.platform == "darwin":
 
     # ------------------------------------------------------ macOS backend
@@ -215,12 +268,41 @@ if sys.platform == "darwin":
 
     class NavDelegate(NSObject):
         """WKNavigationDelegate: signals when the pane document has finished
-        loading, so driver/focus/card JS only runs once the page is live."""
+        loading, and keeps every external link out of the pane's webview.
+
+        The pane is a locked-down chat surface, so any navigation that is not
+        the pane's own document is cancelled; ``http``/``https``/``mailto``
+        URLs are handed to the OS default browser instead (see
+        ``_classify_navigation``)."""
 
         def webView_didFinishNavigation_(self, webview, navigation):
             cb = getattr(self, "py_on_load", None)
             if cb:
                 cb()
+
+        def webView_decidePolicyForNavigationAction_decisionHandler_(
+            self, webview, action, decision_handler
+        ):
+            try:
+                target = action.targetFrame()
+                # A nil target frame is a new-window navigation; treat it as
+                # main-frame (nothing may escape the pane either way).
+                is_main = target is None or target.isMainFrame()
+            except Exception:
+                is_main = True
+            uri = ""
+            if is_main:
+                try:
+                    uri = action.request().URL().absoluteString()
+                except Exception:
+                    uri = ""
+            verdict = _classify_navigation(uri) if is_main else "allow"
+            if verdict == "open":
+                _open_external(uri)
+            if verdict == "allow":
+                decision_handler(WKNavigationActionPolicyAllow)
+            else:
+                decision_handler(WKNavigationActionPolicyCancel)
 
     class Pane(_JsMixin):
         """Transparent floating WKWebView panel rendering the w1c chat pane."""
@@ -739,6 +821,7 @@ else:
                 except Exception:
                     pass
                 webview.connect("load-changed", self._on_load_changed)
+                webview.connect("decide-policy", self._on_decide_policy)
                 webview.load_uri(PANE_HTML.resolve().as_uri())
 
                 win.add(webview)
@@ -764,6 +847,25 @@ else:
 
             def _on_js_message(self, name, body):
                 _route_js_message(body, self)
+
+            def _on_decide_policy(self, webview, decision, decision_type):
+                """Keep external links out of the pane: cancel any navigation
+                that is not the pane's own document and hand ``http``/``https``/
+                ``mailto`` URLs to the OS browser (mirrors the macOS navigation
+                delegate). Returns True when the decision is handled here."""
+                if decision_type != WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
+                    return False
+                try:
+                    uri = decision.get_navigation_action().get_request().get_uri()
+                except Exception:
+                    uri = None
+                verdict = _classify_navigation(uri)
+                if verdict == "allow":
+                    return False  # let WebKit commit the pane's own document
+                if verdict == "open":
+                    _open_external(uri)
+                decision.ignore()
+                return True
 
             def _on_script_message(self, ucm, result):
                 """Emit the posted JSON string exactly like WKScriptMessage.body."""
