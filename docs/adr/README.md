@@ -12,6 +12,7 @@ This directory records significant architectural decisions for Clippy.
 | [0004](0004-screen-geometry-and-drag.md) | Screen geometry in the shell's coordinate space; cursor-poll drag | Accepted | 2026-09-22 |
 | [0005](0005-pane-html-sanitization.md) | Pane HTML sanitization is an allowlist | Accepted | 2026-09-22 |
 | [0006](0006-providers-and-secrets.md) | Pi owns inference providers; secrets live outside config | Accepted | 2026-09-22 |
+| [0007](0007-external-link-handling.md) | Pane links open in the OS browser; navigation intercepted natively | Accepted | 2026-09-23 |
 
 ## Creating a new ADR
 

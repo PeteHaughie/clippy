@@ -47,10 +47,9 @@ the allowlist before insertion. URL attributes are scheme-checked (`http`,
 `https`, `mailto` for `href`; `http`/`https` for `src`), control characters are
 stripped to defeat scheme smuggling, and `target` is dropped with `rel` hardened.
 
-Links never navigate the pane: the native webview navigation policy in
-`clippy/pane.py` (`_classify_navigation`) cancels any navigation that is not the
-pane's own document and opens `http`/`https`/`mailto` URLs in the OS default
-browser. The sanitizer's `target` removal is the first line of that defence.
+Links never navigate the pane; how a clicked link reaches the OS browser
+instead is a separate decision — see [ADR-0007](0007-external-link-handling.md).
+The sanitizer's `target` removal is the first line of that defence.
 
 ## Rationale
 
@@ -75,13 +74,10 @@ browser. The sanitizer's `target` removal is the first line of that defence.
 
 - `assets/pane/sanitize.js`; wired in `assets/pane/w1c_pane.html`
   (`<script src="sanitize.js">`, fail-closed fallback).
-- `clippy/pane.py` — `_classify_navigation` (allow/open/drop) called from the
-  macOS navigation delegate and the WebKitGTK `decide-policy` handler; external
-  links open in the OS browser, the pane document is the only committed URL.
-- `tests/test_sanitize.mjs` (XSS corpus); `tests/test_pane_links.py`
-  (navigation classification).
+- `tests/test_sanitize.mjs` (XSS corpus). External-link navigation is ADR-0007.
 
 ## References
 
 - Commit `5950659` — security hardening
 - `docs/remediation-plan.md` — Phase 1
+- `docs/adr/0007-external-link-handling.md` — where sanitized links may go
