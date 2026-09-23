@@ -25,6 +25,10 @@ Flags:
   --vsync                        force GLX buffer-swap vsync on (Linux defaults
                                  it off to avoid XWayland/Mutter overlay flicker)
 
+On Linux, ``--brain`` also forces Mesa's software GL (llvmpipe) for the avatar:
+the hardware GLX path flickers under XWayland while the WebKitGTK pane is
+active. Set ``LIBGL_ALWAYS_SOFTWARE=0`` to keep hardware GL.
+
 The app itself is a projection of the session graph (clippy/session.py /
 clippy/model.py): the control plane is declared as typed nodes/edges/
 constraints, and this entry point just constructs a :class:`Session`.
@@ -47,6 +51,17 @@ if sys.platform == "darwin":
 if sys.platform != "darwin":
     os.environ.setdefault("GDK_BACKEND", "x11")
 
+# Under XWayland/Mesa (radeonsi) the avatar's hardware GLX rendering flickers
+# while the WebKitGTK pane is active — two GL clients on the same GPU. The pane
+# is CPU-rendered and the avatar is tiny, so force Mesa's software rasteriser
+# (llvmpipe) for the --brain path; it is stable and cheap here. Must be set
+# before pyglet loads the GL driver. Override with LIBGL_ALWAYS_SOFTWARE=0 to
+# keep hardware GL.
+if sys.platform.startswith("linux") and any(
+    a == "--brain" or a.startswith("--brain=") for a in sys.argv
+):
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+
 import pyglet
 
 from clippy.moods import Moods
@@ -58,47 +73,38 @@ ONE_SHOT_HOLD = 1.5  # seconds after a one-shot mood before moving on
 
 PRIME_POS = (60, 420)
 
-#: Avatar pump interval (ms) in the GTK-integrated loop. ~30 fps is plenty — the
-#: sprite animation changes at ~10 fps and the idle/answer timing is time-based —
-#: and it halves main-thread load, leaving the WebKitGTK pane room to handle
-#: typing promptly (it shares the same main loop).
-PUMP_MS = 33
+#: GTK/WebKit main-context pump interval (ms) in the integrated loop. Kept at
+#: ~60 fps so pane input stays responsive.
+PUMP_MS = 16
 
 
 def run_integrated():
-    """Run the pyglet avatar windows from a GTK main loop (Linux --brain only).
+    """Run the avatar on pyglet's own event loop while pumping GTK.
 
-    On macOS, pyglet integrates with the Cocoa event loop itself, so the pane's
-    WKWebView and the avatar share a thread with no extra work. On Linux the
-    WebKitGTK pane needs GLib's main loop on the main thread, so the avatar is
-    pumped from a ~30fps GLib timer (see ``PUMP_MS``) exactly the way pyglet's
-    own main loop would:
-    ``clock.tick()`` for simulation + per-window draw for the frame. The loop
-    ends when pyglet wants out (Q, or the last Clippy window closing), at which
-    point GTK quits too.
+    pyglet's loop (``pyglet.app.run``) is the stable render path: the non-brain
+    mode uses it and the always-on-top transparent overlay does not flicker. The
+    earlier design let GTK own the loop and pumped pyglet from a GLib timer;
+    under XWayland/Mutter that made the overlay flicker and eventually vanish,
+    even though the avatar kept drawing. So here pyglet owns the loop and a
+    clock callback drains the GTK/WebKit main context (what WebKitGTK needs to
+    keep working). The loop ends when pyglet wants out (Q, or the last Clippy
+    window closing).
     """
-    from gi.repository import GLib, Gtk
+    from gi.repository import GLib
 
-    # Match pyglet's own EventLoop.run: without this, dispatch_event('on_draw')
-    # inside Window.draw() is queued and runs on the *next* dispatch_events(),
-    # deferring every frame by one pump and letting draws race X-event polling
-    # under XWayland. With the queue disabled draws are synchronous.
-    pyglet.window.Window._enable_event_queue = False
+    ctx = GLib.MainContext.default()
 
-    def _pump(*_unused):
-        dt = pyglet.clock.tick()
-        for window in list(pyglet.app.windows):
-            window.switch_to()
-            window.dispatch_events()
-            window.draw(dt)
-        if pyglet.app.event_loop.has_exit:
-            Gtk.main_quit()
-            return False
-        return True
+    def _pump_gtk(_dt):
+        # Drain pending GTK/WebKit sources without blocking. Capped so a chatty
+        # source can never starve the avatar's frame.
+        for _ in range(64):
+            if not ctx.pending():
+                break
+            ctx.iteration(False)
 
-    GLib.timeout_add(PUMP_MS, _pump)
-    print("[clippy] running integrated pyglet+GTK loop", flush=True)
-    Gtk.main()
+    pyglet.clock.schedule_interval(_pump_gtk, PUMP_MS / 1000.0)
+    print("[clippy] running pyglet loop + GTK main-context pump", flush=True)
+    pyglet.app.run(interval=1 / 60)
 
 
 def duration_of(avatar, name: str) -> float:
